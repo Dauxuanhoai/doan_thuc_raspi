@@ -11,6 +11,7 @@ sudo apt install -y \
   python3-pil \
   python3-openpyxl \
   python3-picamera2 \
+  opencv-data \
   rpicam-apps
 
 python3 - <<'PY'

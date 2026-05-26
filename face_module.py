@@ -5,8 +5,26 @@ import json
 import unicodedata
 from PIL import Image
 
-# Sử dụng OpenCV LBPH face recognizer (không cần dlib, chạy được trên Raspi4)
-FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+def _find_face_cascade_path():
+    candidates = []
+    if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
+        candidates.append(os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml"))
+    candidates.extend([
+        "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+        "/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml",
+        "/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+        os.path.join(os.path.dirname(__file__), "haarcascade_frontalface_default.xml"),
+    ])
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    raise FileNotFoundError(
+        "Khong tim thay haarcascade_frontalface_default.xml. "
+        "Hay cai: sudo apt install -y opencv-data"
+    )
+
+# Sử dụng Haar Cascade + LBP histogram, nhẹ và chạy được trên Raspberry Pi 4.
+FACE_CASCADE = cv2.CascadeClassifier(_find_face_cascade_path())
 
 ENCODINGS_DIR = os.path.join(os.path.dirname(__file__), "face_data")
 os.makedirs(ENCODINGS_DIR, exist_ok=True)
