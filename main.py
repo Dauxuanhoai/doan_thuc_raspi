@@ -29,6 +29,11 @@ import face_module as fm
 import export_module as em
 
 try:
+    import lcd_status
+except Exception:
+    lcd_status = None
+
+try:
     from picamera2 import Picamera2
 except Exception:
     Picamera2 = None
@@ -438,7 +443,7 @@ class AddStudentDialog(QDialog):
         self.preview_frozen = False
         self.camera_thread = None
         self.setWindowTitle("Thêm Sinh Viên" if not student_data else "Chỉnh Sửa Sinh Viên")
-        self.setMinimumSize(760, 620)
+        self.setMinimumSize(620, 500)
         self.setStyleSheet(STYLESHEET + f"QDialog {{ background-color: {DARK['bg']}; }}")
         self._setup_ui()
         if student_data:
@@ -456,7 +461,9 @@ class AddStudentDialog(QDialog):
         left.addWidget(cam_label)
 
         self.camera_view = QLabel()
-        self.camera_view.setFixedSize(280, 210)
+        self.camera_view.setMinimumSize(220, 165)
+        self.camera_view.setMaximumSize(280, 210)
+        self.camera_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.camera_view.setStyleSheet(f"""
             background-color: {DARK['surface']};
             border: 2px dashed {DARK['border']};
@@ -598,7 +605,7 @@ class AddStudentDialog(QDialog):
         h, w, ch = rgb.shape
         img = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
         pix = QPixmap.fromImage(img).scaled(
-            280, 210, Qt.AspectRatioMode.KeepAspectRatio,
+            max(220, self.camera_view.width()), max(165, self.camera_view.height()), Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
         self.camera_view.setPixmap(pix)
@@ -736,7 +743,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("⚙ Cài Đặt Hệ Thống")
-        self.setMinimumSize(720, 680)
+        self.setMinimumSize(640, 520)
         self.setStyleSheet(STYLESHEET + f"QDialog {{ background-color: {DARK['bg']}; }}")
         self._setup_ui()
         self._load_settings()
@@ -744,7 +751,7 @@ class SettingsDialog(QDialog):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
+        layout.setSpacing(10)
 
         title = QLabel("⚙  Cài Đặt Hệ Thống")
         title.setObjectName("title")
@@ -987,7 +994,11 @@ class MainWindow(QMainWindow):
         fm.load_recognizer()
 
         self.setWindowTitle(f"🎓 Hệ Thống Kiểm Soát Lớp Học v{APP_VERSION}")
-        self.setMinimumSize(1200, 780)
+        self.setMinimumSize(860, 540)
+        screen = QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            self.resize(min(1120, available.width()), min(680, available.height()))
         self.setStyleSheet(STYLESHEET)
 
         self.camera_thread = None
@@ -999,11 +1010,14 @@ class MainWindow(QMainWindow):
         self._missed_scan_counts = {}
         self._last_displayed_name = ""
         self._last_displayed_face_ts = 0
+        self._lcd = lcd_status.LcdStatusDisplay() if lcd_status else None
+        self._lcd_timer = None
 
         self._setup_ui()
         self._sync_period_combo()
         self._setup_status_bar()
         self._start_clock()
+        self._start_lcd_status()
         self._refresh_student_list()
         self._refresh_dashboard()
 
@@ -1018,14 +1032,14 @@ class MainWindow(QMainWindow):
         # ── Sidebar ────────────────────────────────────────────────────────────
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(188)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.setSpacing(2)
 
         # Logo area
         logo_frame = QFrame()
-        logo_frame.setFixedHeight(80)
+        logo_frame.setFixedHeight(68)
         logo_frame.setStyleSheet(f"background-color: {DARK['surface2']}; border-bottom: 1px solid {DARK['border']};")
         logo_layout = QVBoxLayout(logo_frame)
         logo_layout.setContentsMargins(16, 12, 16, 12)
@@ -1093,7 +1107,7 @@ class MainWindow(QMainWindow):
     def _create_dashboard_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(20)
 
         # Header
@@ -1110,7 +1124,7 @@ class MainWindow(QMainWindow):
 
         # Stat Cards
         stats_layout = QHBoxLayout()
-        stats_layout.setSpacing(16)
+        stats_layout.setSpacing(10)
 
         self.stat_cards = {}
         stats_data = [
@@ -1217,8 +1231,8 @@ class MainWindow(QMainWindow):
     def _create_camera_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         # Header
         hdr = QHBoxLayout()
@@ -1235,7 +1249,8 @@ class MainWindow(QMainWindow):
         # Session selector
         session_bar = QFrame()
         session_bar.setObjectName("card")
-        session_bar.setFixedHeight(70)
+        session_bar.setMinimumHeight(58)
+        session_bar.setMaximumHeight(72)
         sb_layout = QHBoxLayout(session_bar)
         sb_layout.setContentsMargins(16, 8, 16, 8)
 
@@ -1285,7 +1300,8 @@ class MainWindow(QMainWindow):
         cam_layout.addLayout(cam_title_row)
 
         self.camera_label = QLabel()
-        self.camera_label.setFixedSize(540, 405)
+        self.camera_label.setMinimumSize(300, 220)
+        self.camera_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.camera_label.setStyleSheet(f"""
             background-color: {DARK['surface']};
             border: 2px solid {DARK['border']};
@@ -1305,7 +1321,8 @@ class MainWindow(QMainWindow):
         # Attendance list panel
         att_panel = QFrame()
         att_panel.setObjectName("card")
-        att_panel.setFixedWidth(320)
+        att_panel.setMinimumWidth(280)
+        att_panel.setMaximumWidth(340)
         att_layout = QVBoxLayout(att_panel)
         att_layout.setContentsMargins(12, 12, 12, 12)
 
@@ -1366,8 +1383,8 @@ class MainWindow(QMainWindow):
     def _create_students_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         hdr = QHBoxLayout()
         title = QLabel("👥  Quản Lý Sinh Viên")
@@ -1377,7 +1394,7 @@ class MainWindow(QMainWindow):
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("🔍 Tìm kiếm sinh viên...")
-        self.search_edit.setFixedWidth(240)
+        self.search_edit.setMaximumWidth(240)
         self.search_edit.textChanged.connect(self._filter_students)
         hdr.addWidget(self.search_edit)
 
@@ -1432,8 +1449,8 @@ class MainWindow(QMainWindow):
     def _create_reports_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         hdr = QHBoxLayout()
         title = QLabel("📊  Báo Cáo & Xuất File")
@@ -1463,7 +1480,7 @@ class MainWindow(QMainWindow):
 
         btn_export_day = QPushButton("📥  Xuất Báo Cáo Theo Ngày")
         btn_export_day.setObjectName("primary")
-        btn_export_day.setFixedWidth(240)
+        btn_export_day.setMaximumWidth(240)
         btn_export_day.clicked.connect(self._export_by_date)
         dl.addWidget(btn_export_day)
 
@@ -1508,7 +1525,7 @@ class MainWindow(QMainWindow):
 
         btn_export_month = QPushButton("📥  Xuất Báo Cáo Tháng")
         btn_export_month.setObjectName("primary")
-        btn_export_month.setFixedWidth(220)
+        btn_export_month.setMaximumWidth(220)
         btn_export_month.clicked.connect(self._export_monthly)
         ml.addWidget(btn_export_month)
         ml.addStretch()
@@ -1521,8 +1538,8 @@ class MainWindow(QMainWindow):
     def _create_settings_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         title = QLabel("⚙  Cài Đặt")
         title.setObjectName("title")
@@ -1530,7 +1547,7 @@ class MainWindow(QMainWindow):
 
         btn_open = QPushButton("⚙  Mở Cài Đặt Chi Tiết")
         btn_open.setObjectName("primary")
-        btn_open.setFixedWidth(220)
+        btn_open.setMaximumWidth(220)
         btn_open.clicked.connect(self._open_settings)
         layout.addWidget(btn_open)
 
@@ -1569,6 +1586,65 @@ class MainWindow(QMainWindow):
         self._sync_current_time_state(now)
         if self.session_active:
             self._auto_check_session_time(now)
+
+    def _start_lcd_status(self):
+        if not self._lcd:
+            return
+        self._lcd_timer = QTimer(self)
+        self._lcd_timer.timeout.connect(self._update_lcd_status)
+        self._lcd_timer.start(2000)
+        self._update_lcd_status()
+
+    def _update_lcd_status(self):
+        if not self._lcd:
+            return
+        try:
+            settings = db.get_all_settings()
+            students = db.get_all_students()
+            total = len(students)
+            present = absent = half = 0
+            period = self.period_combo.currentData() if hasattr(self, "period_combo") else None
+            status = "San sang"
+            if self.session_active and self.current_session_id:
+                status = "Dang diem danh"
+                for item in db.get_attendance_by_session(self.current_session_id):
+                    if item["status"] == "present":
+                        present += 1
+                    elif item["status"] == "half":
+                        half += 1
+                    elif item["status"] == "absent":
+                        absent += 1
+                absent = max(absent, total - present - half)
+            else:
+                state = self._get_time_state()
+                if state["type"] == "period":
+                    status = f"Cho tiet {state['period']}"
+                    period = state["period"]
+                elif state["type"] == "break":
+                    status = "Dang ra choi"
+                else:
+                    status = "Ngoai gio hoc"
+            last_seen = self._last_displayed_name
+            if datetime.now().timestamp() - self._last_displayed_face_ts > 12:
+                last_seen = ""
+            self._lcd.update({
+                "class_name": settings.get("class_name", "Lop hoc"),
+                "status": status,
+                "period": period,
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "date": datetime.now().strftime("%d/%m/%Y"),
+                "total": total,
+                "present": present,
+                "absent": absent,
+                "half": half,
+                "last_seen": last_seen,
+            })
+        except Exception as exc:
+            try:
+                self._lcd.update({"status": f"LCD loi: {exc}", "time": datetime.now().strftime("%H:%M:%S")})
+            except Exception:
+                pass
+
 
     def _time_minutes(self, hhmm):
         t = datetime.strptime(hhmm, "%H:%M").time()
@@ -1722,6 +1798,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_attendance_table()
         self.statusBar().showMessage(f"▶ Tiết {period} bắt đầu — {datetime.now().strftime('%H:%M:%S')}")
+        self._update_lcd_status()
 
         # Auto refresh attendance every 5s
         self._att_timer = QTimer(self)
@@ -1760,6 +1837,7 @@ class MainWindow(QMainWindow):
         self._refresh_attendance_table()
         self._refresh_dashboard()
         self.statusBar().showMessage(f"⏹ Tiết học kết thúc — {datetime.now().strftime('%H:%M:%S')}")
+        self._update_lcd_status()
 
     def _update_camera_frame(self, frame):
         self.cam_status_badge.setText("● LIVE")
@@ -1768,7 +1846,8 @@ class MainWindow(QMainWindow):
         h, w, ch = rgb.shape
         img = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
         pix = QPixmap.fromImage(img).scaled(
-            540, 405, Qt.AspectRatioMode.KeepAspectRatio,
+            max(300, self.camera_label.width()), max(220, self.camera_label.height()),
+            Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
         self.camera_label.setPixmap(pix)
@@ -1782,6 +1861,7 @@ class MainWindow(QMainWindow):
             f"✅ {datetime.now().strftime('%H:%M:%S')} — {name} ({student_id}) — {confidence:.0f}% khớp"
         )
         self.scan_log_label.setStyleSheet(f"color: {DARK['green']}; font-size: 11px; padding: 4px;")
+        self._update_lcd_status()
 
     def _on_cam_status(self, msg):
         self.scan_log_label.setText(msg)
@@ -1932,6 +2012,7 @@ class MainWindow(QMainWindow):
         self.mini_present[1].setText(str(present))
         self.mini_absent[1].setText(str(absent))
         self.mini_half[1].setText(str(half))
+        self._update_lcd_status()
 
     # ── Students ───────────────────────────────────────────────────────────────
 
@@ -2174,6 +2255,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self.camera_thread:
             self.camera_thread.stop()
+        if self._lcd_timer:
+            self._lcd_timer.stop()
+        if self._lcd:
+            self._lcd.update({"status": "App da tat", "time": datetime.now().strftime("%H:%M:%S")})
         event.accept()
 
 
@@ -2197,7 +2282,7 @@ def main():
     app.setStyleSheet(STYLESHEET)
 
     window = MainWindow()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec())
 
 
