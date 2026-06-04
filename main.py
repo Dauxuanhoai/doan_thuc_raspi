@@ -5,7 +5,7 @@ import json
 import numpy as np
 import subprocess
 import platform
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFrame, QScrollArea, QDialog, QLineEdit,
@@ -304,19 +304,26 @@ class CameraThread(QThread):
         self.running = False
         self.current_session_id = None
         self._scan_cooldown = {}
-        self._scan_interval = 30
         self._last_face_boxes = []
         self._last_face_ts = 0
+        self._last_process_ts = 0
+        self._process_interval = 0.18 if mode == "monitor" else 0.28
+        self._display_interval = 0.04
+        self._last_display_ts = 0
+        self._detect_scale = 0.6
 
     def set_session(self, session_id):
         self.current_session_id = session_id
 
     def _open_camera(self):
+        width = 480 if self.mode == "monitor" else 640
+        height = 360 if self.mode == "monitor" else 480
+
         if platform.system() == "Linux" and Picamera2 is not None:
             try:
                 picam = Picamera2()
                 config = picam.create_preview_configuration(
-                    main={"format": "RGB888", "size": (640, 480)}
+                    main={"format": "RGB888", "size": (width, height)}
                 )
                 picam.configure(config)
                 picam.start()
@@ -326,8 +333,9 @@ class CameraThread(QThread):
 
         backend = cv2.CAP_V4L2 if platform.system() == "Linux" else cv2.CAP_DSHOW
         cap = cv2.VideoCapture(0, backend)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not cap.isOpened():
             cap.release()
             return None, None
@@ -357,27 +365,33 @@ class CameraThread(QThread):
             self.running = False
             return
 
-        frame_count = 0
         while self.running:
             ret, frame = self._read_camera_frame(camera_type, camera)
             if not ret:
+                self.msleep(20)
                 continue
-
             frame = cv2.flip(frame, 1)
-            frame_count += 1
 
             now_ts = datetime.now().timestamp()
-            if frame_count % 5 == 0:  # process every 5 frames
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = fm.detect_faces(gray)
+            if now_ts - self._last_process_ts >= self._process_interval:
+                self._last_process_ts = now_ts
+                small = cv2.resize(frame, None, fx=self._detect_scale, fy=self._detect_scale)
+                gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                faces_small = fm.detect_faces(gray_small)
                 self._last_face_boxes = []
                 self._last_face_ts = now_ts
 
-                for (x, y, w, h) in faces:
+                for (sx, sy, sw, sh) in faces_small:
+                    x = int(sx / self._detect_scale)
+                    y = int(sy / self._detect_scale)
+                    w = int(sw / self._detect_scale)
+                    h = int(sh / self._detect_scale)
+
                     if self.mode == "capture":
                         self._last_face_boxes.append((x, y, w, h, None, 0, "scanning"))
                         continue
 
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     enc = fm.extract_encoding_from_frame(gray, x, y, w, h)
                     sid, name, conf = fm.recognize_face(enc)
 
@@ -397,8 +411,10 @@ class CameraThread(QThread):
                 for x, y, w, h, name, conf, status in self._last_face_boxes:
                     fm.draw_face_box(frame, x, y, w, h, name, conf, status)
 
-            self.frame_ready.emit(frame)
-            self.msleep(30)
+            if now_ts - self._last_display_ts >= self._display_interval:
+                self._last_display_ts = now_ts
+                self.frame_ready.emit(frame)
+            self.msleep(10)
 
         self._close_camera(camera_type, camera)
 
@@ -575,10 +591,6 @@ class AddStudentDialog(QDialog):
         if self.preview_frozen:
             return
         self.latest_frame = frame.copy()
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = fm.detect_faces(gray)
-        for (x, y, w, h) in faces:
-            fm.draw_face_box(frame, x, y, w, h, status="scanning")
         self._show_cv_frame(frame)
 
     def _show_cv_frame(self, frame):
@@ -1392,18 +1404,27 @@ class MainWindow(QMainWindow):
         self.students_table.setHorizontalHeaderLabels([
             "Ảnh", "Mã SV", "Họ và Tên", "Khuôn Mặt", "Ngày Thêm", "Thao Tác"
         ])
-        self.students_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.students_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.students_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.students_table.setColumnWidth(0, 60)
-        self.students_table.setColumnWidth(1, 100)
-        self.students_table.setColumnWidth(3, 120)
-        self.students_table.setColumnWidth(4, 120)
-        self.students_table.setColumnWidth(5, 180)
-        self.students_table.setRowHeight(0, 52)
+        header = self.students_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.students_table.setColumnWidth(0, 72)
+        self.students_table.setColumnWidth(3, 150)
+        self.students_table.setColumnWidth(4, 125)
+        self.students_table.setColumnWidth(5, 170)
+        self.students_table.verticalHeader().setDefaultSectionSize(60)
+        self.students_table.verticalHeader().setMinimumSectionSize(60)
         self.students_table.verticalHeader().setVisible(False)
         self.students_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.students_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.students_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.students_table.setAlternatingRowColors(True)
+        self.students_table.setWordWrap(False)
+        self.students_table.setShowGrid(False)
         layout.addWidget(self.students_table)
 
         return page
@@ -1432,12 +1453,17 @@ class MainWindow(QMainWindow):
         self.export_date = QComboBox()
         self._populate_date_combo()
         day_form.addWidget(self.export_date)
+        day_form.addWidget(QLabel("Định dạng:"))
+        self.export_format = QComboBox()
+        self.export_format.addItem("Excel (.xlsx)", "xlsx")
+        self.export_format.addItem("PDF (.pdf)", "pdf")
+        day_form.addWidget(self.export_format)
         day_form.addStretch()
         dl.addLayout(day_form)
 
-        btn_export_day = QPushButton("📥  Xuất Excel Theo Ngày")
+        btn_export_day = QPushButton("📥  Xuất Báo Cáo Theo Ngày")
         btn_export_day.setObjectName("primary")
-        btn_export_day.setFixedWidth(220)
+        btn_export_day.setFixedWidth(240)
         btn_export_day.clicked.connect(self._export_by_date)
         dl.addWidget(btn_export_day)
 
@@ -1472,6 +1498,11 @@ class MainWindow(QMainWindow):
         self.year_spin.setRange(2020, 2030)
         self.year_spin.setValue(datetime.now().year)
         month_form.addWidget(self.year_spin)
+        month_form.addWidget(QLabel("Định dạng:"))
+        self.month_export_format = QComboBox()
+        self.month_export_format.addItem("Excel (.xlsx)", "xlsx")
+        self.month_export_format.addItem("PDF (.pdf)", "pdf")
+        month_form.addWidget(self.month_export_format)
         month_form.addStretch()
         ml.addLayout(month_form)
 
@@ -1789,7 +1820,7 @@ class MainWindow(QMainWindow):
         scan_interval = int(settings.get("scan_interval_seconds", 30))
         threshold = int(settings.get("absent_threshold", 3))
         session_rows = db.get_attendance_by_session(self.current_session_id)
-        status_map = {a["student_id"]: a["status"] for a in session_rows}
+        attendance_map = {a["student_id"]: a for a in session_rows}
 
         session = None
         for item in db.get_sessions_by_date(date.today().isoformat()):
@@ -1797,13 +1828,23 @@ class MainWindow(QMainWindow):
                 session = item
                 break
 
+        start_dt = end_dt = None
         if session:
             start_dt = datetime.combine(
                 date.today(),
                 datetime.strptime(session["start_time"], "%H:%M").time()
             )
+            end_dt = datetime.combine(
+                date.today(),
+                datetime.strptime(session["end_time"], "%H:%M").time()
+            )
+            if end_dt <= start_dt:
+                end_dt += timedelta(days=1)
             if (datetime.now() - start_dt).total_seconds() < grace_minutes * 60:
                 return
+
+        session_seconds = (end_dt - start_dt).total_seconds() if start_dt and end_dt else 90 * 60
+        half_absent_seconds = max(scan_interval * threshold, session_seconds * 0.35)
 
         now = datetime.now()
         changed = False
@@ -1815,9 +1856,20 @@ class MainWindow(QMainWindow):
                 continue
 
             self._missed_scan_counts[sid] = self._missed_scan_counts.get(sid, 0) + 1
-            current_status = status_map.get(sid)
+            att = attendance_map.get(sid)
+            current_status = att["status"] if att else None
             if current_status == "present":
-                if self._missed_scan_counts[sid] >= threshold:
+                last_seen_dt = self._last_seen_students.get(sid)
+                if not last_seen_dt and att:
+                    last_seen_text = att.get("last_seen_time") or att.get("check_in_time")
+                    if last_seen_text:
+                        last_seen_dt = datetime.combine(
+                            date.today(),
+                            datetime.strptime(last_seen_text, "%H:%M:%S").time()
+                        )
+
+                away_seconds = (now - last_seen_dt).total_seconds() if last_seen_dt else session_seconds
+                if self._missed_scan_counts[sid] >= threshold and away_seconds >= half_absent_seconds:
                     db.mark_half_attendance(sid, self.current_session_id)
                     db.log_scan(sid, self.current_session_id, "half")
                     changed = True
@@ -1899,16 +1951,16 @@ class MainWindow(QMainWindow):
         for student in students:
             row = self.students_table.rowCount()
             self.students_table.insertRow(row)
-            self.students_table.setRowHeight(row, 52)
+            self.students_table.setRowHeight(row, 60)
 
             # Avatar
             photo_path = student.get("photo_path")
             avatar_lbl = QLabel()
             avatar_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            avatar_lbl.setFixedSize(52, 52)
+            avatar_lbl.setFixedSize(56, 56)
             if photo_path and os.path.exists(photo_path):
                 pix = QPixmap(photo_path).scaled(
-                    48, 48,
+                    50, 50,
                     Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation
                 )
@@ -1925,6 +1977,7 @@ class MainWindow(QMainWindow):
             self.students_table.setItem(row, 1, id_item)
 
             name_item = QTableWidgetItem(student["name"])
+            name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
             self.students_table.setItem(row, 2, name_item)
 
             has_enc = student.get("face_encoding") is not None
@@ -1942,24 +1995,26 @@ class MainWindow(QMainWindow):
             # Action buttons
             action_widget = QWidget()
             action_layout = QHBoxLayout(action_widget)
-            action_layout.setContentsMargins(8, 6, 8, 6)
-            action_layout.setSpacing(10)
+            action_layout.setContentsMargins(6, 8, 6, 8)
+            action_layout.setSpacing(8)
             action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-            btn_edit = QPushButton("Sửa")
-            btn_edit.setFixedSize(68, 32)
-            btn_edit.setToolTip("Chỉnh sửa")
+            btn_edit = QPushButton("✎")
+            btn_edit.setFixedSize(36, 34)
+            btn_edit.setToolTip("Chỉnh sửa sinh viên")
             btn_edit.clicked.connect(lambda _, s=student: self._edit_student(s))
 
-            btn_del = QPushButton("Xóa")
-            btn_del.setFixedSize(68, 32)
+            btn_del = QPushButton("×")
+            btn_del.setFixedSize(36, 34)
             btn_del.setObjectName("danger")
-            btn_del.setToolTip("Xóa")
+            btn_del.setToolTip("Xóa sinh viên")
             btn_del.clicked.connect(lambda _, sid=student["student_id"]: self._delete_student(sid))
 
             action_layout.addWidget(btn_edit)
             action_layout.addWidget(btn_del)
             self.students_table.setCellWidget(row, 5, action_widget)
+
+        self.students_table.resizeColumnToContents(1)
 
     def _filter_students(self, text):
         self._refresh_student_list(text)
@@ -2041,7 +2096,11 @@ class MainWindow(QMainWindow):
         if not target_date:
             QMessageBox.warning(self, "Lỗi", "Vui lòng chọn ngày!")
             return
-        filepath, msg = em.export_by_date(target_date)
+        export_format = self.export_format.currentData() if hasattr(self, "export_format") else "xlsx"
+        if export_format == "pdf":
+            filepath, msg = em.export_by_date_pdf(target_date)
+        else:
+            filepath, msg = em.export_by_date(target_date)
         if filepath:
             reply = QMessageBox.information(
                 self, "✅ Xuất Thành Công",
@@ -2056,7 +2115,11 @@ class MainWindow(QMainWindow):
     def _export_monthly(self):
         month = self.month_combo.currentData()
         year = self.year_spin.value()
-        filepath, msg = em.export_monthly_report(year, month)
+        export_format = self.month_export_format.currentData() if hasattr(self, "month_export_format") else "xlsx"
+        if export_format == "pdf":
+            filepath, msg = em.export_monthly_report_pdf(year, month)
+        else:
+            filepath, msg = em.export_monthly_report(year, month)
         if filepath:
             QMessageBox.information(self, "✅ Xuất Thành Công", f"{msg}\n\nFile: {filepath}")
         else:

@@ -23,7 +23,7 @@ def _find_face_cascade_path():
         "Hay cai: sudo apt install -y opencv-data"
     )
 
-# Sử dụng Haar Cascade + LBP histogram, nhẹ và chạy được trên Raspberry Pi 4.
+# Su dung Haar Cascade + LBP histogram, nhe va chay duoc tren Raspberry Pi 4.
 FACE_CASCADE = cv2.CascadeClassifier(_find_face_cascade_path())
 
 ENCODINGS_DIR = os.path.join(os.path.dirname(__file__), "face_data")
@@ -86,29 +86,33 @@ def extract_encoding_from_frame(frame_gray, x, y, w, h):
 
 def _compute_lbp_histogram(face_gray):
     """Tính LBP histogram cho face region"""
-    radius = 1
-    n_points = 8
-    lbp = np.zeros_like(face_gray, dtype=np.uint8)
-    for i in range(radius, face_gray.shape[0] - radius):
-        for j in range(radius, face_gray.shape[1] - radius):
-            center = face_gray[i, j]
-            binary = 0
-            for k in range(n_points):
-                angle = 2 * np.pi * k / n_points
-                xi = i + int(round(radius * np.sin(angle)))
-                xj = j + int(round(radius * np.cos(angle)))
-                if face_gray[xi, xj] >= center:
-                    binary |= (1 << k)
-            lbp[i, j] = binary
+    face_gray = face_gray.astype(np.uint8, copy=False)
+    center = face_gray[1:-1, 1:-1]
+    lbp_inner = np.zeros(center.shape, dtype=np.uint8)
+    neighbors = (
+        face_gray[1:-1, 2:],
+        face_gray[2:, 2:],
+        face_gray[2:, 1:-1],
+        face_gray[2:, :-2],
+        face_gray[1:-1, :-2],
+        face_gray[:-2, :-2],
+        face_gray[:-2, 1:-1],
+        face_gray[:-2, 2:],
+    )
+    for bit, neighbor in enumerate(neighbors):
+        lbp_inner |= ((neighbor >= center).astype(np.uint8) << bit)
 
-    # Chia thành grid 5x5 và tính histogram từng ô
+    lbp = np.zeros_like(face_gray, dtype=np.uint8)
+    lbp[1:-1, 1:-1] = lbp_inner
+
+    # Chia thành grid 5x5 và tính histogram từng ô.
     h, w = lbp.shape
     grid_h, grid_w = h // 5, w // 5
     hist_all = []
     for gi in range(5):
         for gj in range(5):
             cell = lbp[gi*grid_h:(gi+1)*grid_h, gj*grid_w:(gj+1)*grid_w]
-            hist, _ = np.histogram(cell.ravel(), bins=32, range=(0, 256))
+            hist = np.bincount((cell.ravel() // 8), minlength=32)[:32]
             hist = hist.astype(np.float32)
             norm = np.linalg.norm(hist)
             if norm > 0:

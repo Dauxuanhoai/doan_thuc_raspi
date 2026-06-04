@@ -6,6 +6,7 @@ from openpyxl.styles import (
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, Reference
 from datetime import datetime, date
+from PIL import Image, ImageDraw, ImageFont
 import database as db
 
 EXPORT_DIR = os.path.join(os.path.dirname(__file__), "exports")
@@ -260,7 +261,7 @@ def export_monthly_report(year: int, month: int) -> str:
 
     wb = Workbook()
     ws = wb.active
-    ws.title = f"Báo cáo T{month}/{year}"
+    ws.title = f"Bao cao T{month}-{year}"
 
     ws.merge_cells("A1:G1")
     ws["A1"] = f"BÁO CÁO THÁNG {month}/{year} - {class_name.upper()}"
@@ -299,6 +300,166 @@ def export_monthly_report(year: int, month: int) -> str:
     filename = f"baocao_thang_{month:02d}_{year}.xlsx"
     filepath = os.path.join(EXPORT_DIR, filename)
     wb.save(filepath)
+    return filepath, f"Xuất thành công: {filename}"
+
+
+def _load_pdf_font(size=24, bold=False):
+    candidates = [
+        r"C:\Windows\Fonts\arialbd.ttf" if bold else r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\segoeuib.ttf" if bold else r"C:\Windows\Fonts\segoeui.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    for path in candidates:
+        if path and os.path.exists(path):
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
+
+
+def _fit_text(draw, text, font, max_width):
+    text = "" if text is None else str(text)
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    ellipsis = "..."
+    while text and draw.textlength(text + ellipsis, font=font) > max_width:
+        text = text[:-1]
+    return text + ellipsis if text else ellipsis
+
+
+def _draw_pdf_table(filepath, title, subtitle, headers, rows):
+    page_w, page_h = 1754, 1240
+    margin = 60
+    title_font = _load_pdf_font(32, True)
+    sub_font = _load_pdf_font(18)
+    header_font = _load_pdf_font(17, True)
+    cell_font = _load_pdf_font(16)
+    row_h = 44
+    header_h = 52
+    top_h = 126
+    usable_h = page_h - margin - top_h - 54
+    rows_per_page = max(1, (usable_h - header_h) // row_h)
+
+    if not rows:
+        rows = [["Không có dữ liệu"] + [""] * (len(headers) - 1)]
+
+    pages = []
+    total_pages = (len(rows) + rows_per_page - 1) // rows_per_page
+    for page_start in range(0, len(rows), rows_per_page):
+        chunk = rows[page_start:page_start + rows_per_page]
+        img = Image.new("RGB", (page_w, page_h), "white")
+        draw = ImageDraw.Draw(img)
+
+        draw.rectangle([0, 0, page_w, 90], fill="#1A3C5E")
+        draw.text((margin, 22), title, fill="white", font=title_font)
+        draw.text((margin, 98), subtitle, fill="#34495E", font=sub_font)
+
+        table_x = margin
+        table_y = margin + top_h
+        table_w = page_w - margin * 2
+        fixed = [70, 160]
+        remaining = table_w - sum(fixed)
+        if len(headers) <= 2:
+            col_widths = [table_w // len(headers)] * len(headers)
+        else:
+            name_w = min(360, max(250, int(remaining * 0.28)))
+            other_count = max(1, len(headers) - 3)
+            other_w = max(92, int((remaining - name_w) / other_count))
+            col_widths = fixed + [name_w] + [other_w] * other_count
+            col_widths[-1] += table_w - sum(col_widths)
+
+        x = table_x
+        for col, header in enumerate(headers):
+            w = col_widths[col]
+            draw.rectangle([x, table_y, x + w, table_y + header_h], fill="#34495E", outline="#2A3F55")
+            draw.text((x + 7, table_y + 15), _fit_text(draw, header, header_font, w - 14), fill="white", font=header_font)
+            x += w
+
+        y = table_y + header_h
+        fills = {"Có mặt": "#C6EFCE", "Vắng": "#FFC7CE", "Học 1/2": "#FFEB9C", "Đang quét": "#BDD7EE"}
+        for ridx, row in enumerate(chunk):
+            x = table_x
+            base_fill = "#F5F8FB" if ridx % 2 else "white"
+            for col, value in enumerate(row):
+                w = col_widths[col]
+                fill = fills.get(str(value), base_fill)
+                draw.rectangle([x, y, x + w, y + row_h], fill=fill, outline="#D7DEE8")
+                draw.text((x + 7, y + 12), _fit_text(draw, value, cell_font, w - 14), fill="#1B2530", font=cell_font)
+                x += w
+            y += row_h
+
+        page_no = len(pages) + 1
+        draw.text((page_w - margin - 160, page_h - 36), f"Trang {page_no}/{total_pages}", fill="#637083", font=sub_font)
+        pages.append(img)
+
+    pages[0].save(filepath, "PDF", resolution=150.0, save_all=True, append_images=pages[1:])
+
+
+def export_by_date_pdf(target_date: str):
+    settings = db.get_all_settings()
+    class_name = settings.get("class_name", "Lớp học")
+    total_periods = int(settings.get("total_periods", 3))
+    sessions = db.get_sessions_by_date(target_date)
+    if not sessions:
+        return None, "Không có buổi học nào trong ngày này"
+    students = db.get_all_students()
+    if not students:
+        return None, "Chưa có sinh viên nào"
+
+    session_map = {s["period"]: s for s in sessions}
+    headers = ["STT", "Mã SV", "Họ và Tên"] + [f"Tiết {p}" for p in range(1, total_periods + 1)] + ["Tỉ lệ"]
+    rows = []
+    for idx, student in enumerate(students, 1):
+        sid = student["student_id"]
+        row = [idx, sid, student["name"]]
+        score = 0
+        for p in range(1, total_periods + 1):
+            sess = session_map.get(p)
+            status = "-"
+            if sess:
+                att_list = db.get_attendance_by_session(sess["id"])
+                att = next((a for a in att_list if a["student_id"] == sid), None)
+                status = att["status"] if att else "absent"
+            row.append(STATUS_VI.get(status, "-"))
+            if status == "present":
+                score += 1
+            elif status == "half":
+                score += 0.5
+        ratio = round(score / total_periods * 100, 1) if total_periods else 0
+        row.append(f"{ratio}%")
+        rows.append(row)
+
+    filename = f"diemdanh_{target_date}.pdf"
+    filepath = os.path.join(EXPORT_DIR, filename)
+    _draw_pdf_table(
+        filepath,
+        f"BẢNG ĐIỂM DANH - {class_name.upper()}",
+        f"Ngày: {_format_date_vi(target_date)} | Xuất lúc: {datetime.now().strftime('%H:%M %d/%m/%Y')}",
+        headers,
+        rows,
+    )
+    return filepath, f"Xuất thành công: {filename}"
+
+
+def export_monthly_report_pdf(year: int, month: int):
+    stats = db.get_monthly_stats(year, month)
+    settings = db.get_all_settings()
+    class_name = settings.get("class_name", "Lớp học")
+    headers = ["STT", "Mã SV", "Họ và Tên", "Có mặt", "Vắng", "Học 1/2", "Tỉ lệ"]
+    rows = []
+    for idx, s in enumerate(stats, 1):
+        total = s["total_sessions"] if s["total_sessions"] else 1
+        ratio = round((s["present_count"] + s["half_count"] * 0.5) / total * 100, 1)
+        rows.append([idx, s["student_id"], s["name"], s["present_count"], s["absent_count"], s["half_count"], f"{ratio}%"])
+
+    filename = f"baocao_thang_{month:02d}_{year}.pdf"
+    filepath = os.path.join(EXPORT_DIR, filename)
+    _draw_pdf_table(
+        filepath,
+        f"BÁO CÁO THÁNG {month}/{year} - {class_name.upper()}",
+        f"Xuất lúc: {datetime.now().strftime('%H:%M %d/%m/%Y')}",
+        headers,
+        rows,
+    )
     return filepath, f"Xuất thành công: {filename}"
 
 

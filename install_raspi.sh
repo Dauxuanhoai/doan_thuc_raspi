@@ -12,7 +12,8 @@ sudo apt install -y \
   python3-openpyxl \
   python3-picamera2 \
   opencv-data \
-  rpicam-apps
+  rpicam-apps \
+  fonts-dejavu-core
 
 python3 - <<'PY'
 import cv2
@@ -22,6 +23,11 @@ try:
     print("Picamera2: ok")
 except Exception as exc:
     print("Picamera2:", exc)
+try:
+    from PyQt6.QtWidgets import QApplication
+    print("PyQt6: ok")
+except Exception as exc:
+    print("PyQt6:", exc)
 PY
 
 echo "Cai dat xong. Chay: python3 main.py"

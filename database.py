@@ -44,12 +44,18 @@ def init_db():
             session_id INTEGER NOT NULL,
             status TEXT DEFAULT 'absent',
             check_in_time TEXT,
+            last_seen_time TEXT,
             scan_count INTEGER DEFAULT 0,
             FOREIGN KEY (student_id) REFERENCES students(student_id),
             FOREIGN KEY (session_id) REFERENCES sessions(id),
             UNIQUE(student_id, session_id)
         )
     """)
+
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(attendance)").fetchall()}
+    if "last_seen_time" not in cols:
+        c.execute("ALTER TABLE attendance ADD COLUMN last_seen_time TEXT")
+        c.execute("UPDATE attendance SET last_seen_time=check_in_time WHERE check_in_time IS NOT NULL")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS scan_logs (
@@ -67,6 +73,10 @@ def init_db():
             value TEXT
         )
     """)
+
+    c.execute("CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance(session_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_scan_logs_student_session ON scan_logs(student_id, session_id)")
 
     # Default settings
     defaults = {
@@ -92,6 +102,22 @@ def init_db():
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+
+    # Clean records left behind by older versions that deleted students only from
+    # the students table. This keeps student management and reports consistent.
+    c.execute("""
+        DELETE FROM attendance
+        WHERE NOT EXISTS (
+            SELECT 1 FROM students WHERE students.student_id = attendance.student_id
+        )
+    """)
+    c.execute("""
+        DELETE FROM scan_logs
+        WHERE student_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM students WHERE students.student_id = scan_logs.student_id
+          )
+    """)
 
     conn.commit()
     conn.close()
@@ -167,6 +193,8 @@ def get_student(student_id):
 
 def delete_student(student_id):
     conn = get_connection()
+    conn.execute("DELETE FROM scan_logs WHERE student_id=?", (student_id,))
+    conn.execute("DELETE FROM attendance WHERE student_id=?", (student_id,))
     conn.execute("DELETE FROM students WHERE student_id=?", (student_id,))
     conn.commit()
     conn.close()
@@ -243,19 +271,22 @@ def mark_present(student_id, session_id, check_in_time=None):
         (student_id, session_id)
     ).fetchone()
     if existing:
-        if existing["status"] == "half":
-            conn.commit()
-            conn.close()
-            return
-        if existing["status"] != "present":
-            conn.execute(
-                "UPDATE attendance SET status='present', check_in_time=?, scan_count=scan_count+1 WHERE student_id=? AND session_id=?",
-                (check_in_time, student_id, session_id)
-            )
+        first_seen = existing["check_in_time"] or check_in_time
+        conn.execute(
+            """
+            UPDATE attendance
+            SET status='present', check_in_time=?, last_seen_time=?, scan_count=0
+            WHERE student_id=? AND session_id=?
+            """,
+            (first_seen, check_in_time, student_id, session_id)
+        )
     else:
         conn.execute(
-            "INSERT INTO attendance (student_id, session_id, status, check_in_time, scan_count) VALUES (?, ?, 'present', ?, 1)",
-            (student_id, session_id, check_in_time)
+            """
+            INSERT INTO attendance (student_id, session_id, status, check_in_time, last_seen_time, scan_count)
+            VALUES (?, ?, 'present', ?, ?, 0)
+            """,
+            (student_id, session_id, check_in_time, check_in_time)
         )
     conn.commit()
     conn.close()
