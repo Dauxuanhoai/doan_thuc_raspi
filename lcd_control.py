@@ -17,6 +17,7 @@ APP_MAIN = APP_DIR / "main.py"
 APP_LOG = APP_DIR / "app.log"
 FB_PATH = "/dev/fb1"
 TOUCH_PATH = "/dev/input/event0"
+RUNUSER = "/usr/sbin/runuser" if os.path.exists("/usr/sbin/runuser") else "runuser"
 W, H = 480, 320
 
 EV_KEY = 1
@@ -153,9 +154,23 @@ class LcdUi:
                 return ImageFont.truetype(p, size)
         return ImageFont.load_default()
 
+    def app_pids(self):
+        pids = []
+        app_path = str(APP_MAIN)
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/cmdline", "rb") as f:
+                    args = [p.decode("utf-8", "ignore") for p in f.read().split(b"\0") if p]
+            except OSError:
+                continue
+            if len(args) >= 2 and Path(args[0]).name.startswith("python") and app_path in args:
+                pids.append(int(entry))
+        return pids
+
     def app_running(self):
-        out = run(["pgrep", "-af", r"python3 .*main.py"], timeout=2)
-        return "python3 main.py" in out
+        return bool(self.app_pids())
 
     def ip_addr(self):
         out = run(["hostname", "-I"], timeout=2)
@@ -200,13 +215,23 @@ class LcdUi:
             run(["systemctl", "start", "lightdm"], timeout=12)
             time.sleep(4)
         APP_LOG.write_text("", encoding="utf-8")
-        cmd = ["runuser", "-u", "hoaidau", "--", "setsid", "env", "DISPLAY=:0",
+        cmd = [RUNUSER, "-u", "hoaidau", "--", "setsid", "env", "DISPLAY=:0",
                "XAUTHORITY=/home/hoaidau/.Xauthority", "python3", str(APP_MAIN)]
         popen_detached(cmd, cwd=str(APP_DIR), stdout_path=str(APP_LOG))
         self.message = "App started"
 
     def stop_app(self):
-        run(["pkill", "-f", r"python3 .*main.py"], timeout=4)
+        for pid in self.app_pids():
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        time.sleep(1)
+        for pid in self.app_pids():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
         self.message = "App stopped"
 
     def connect_wifi(self):

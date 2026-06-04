@@ -1,6 +1,6 @@
 [Unit]
 Description=Classroom LCD controller
-After=multi-user.target NetworkManager.service
+After=local-fs.target
 Wants=NetworkManager.service
 
 [Service]
@@ -12,4 +12,4 @@ RestartSec=2
 User=root
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=basic.target
