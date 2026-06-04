@@ -25,6 +25,9 @@ EV_SYN = 0
 BTN_TOUCH = 330
 ABS_X = 0
 ABS_Y = 1
+ABS_PRESSURE = 24
+EVENT_FORMAT = "llHHI"
+EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
 
 # ADS7846 calibration from /etc/X11/xorg.conf.d/99-calibration.conf.
 CAL_X_MIN = 268
@@ -55,6 +58,7 @@ class Touch:
         self.raw_x = 0
         self.raw_y = 0
         self.down = False
+        self.seen_abs = False
         self.open()
 
     def open(self):
@@ -79,19 +83,24 @@ class Touch:
         point = None
         try:
             while True:
-                data = os.read(self.fd, 24)
-                if len(data) < 24:
+                data = os.read(self.fd, EVENT_SIZE)
+                if len(data) < EVENT_SIZE:
                     break
-                _, _, ev_type, code, value = struct.unpack("llHHI", data)
+                _, _, ev_type, code, value = struct.unpack(EVENT_FORMAT, data)
                 if ev_type == EV_ABS:
                     if code == ABS_X:
                         self.raw_x = value
+                        self.seen_abs = True
                     elif code == ABS_Y:
                         self.raw_y = value
+                        self.seen_abs = True
+                    elif code == ABS_PRESSURE:
+                        self.down = value > 0
                 elif ev_type == EV_KEY and code == BTN_TOUCH:
                     self.down = bool(value)
-                elif ev_type == EV_SYN and self.down:
+                elif ev_type == EV_SYN and (self.down or self.seen_abs):
                     point = self.map_point()
+                    self.seen_abs = False
         except BlockingIOError:
             pass
         except OSError:
