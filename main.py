@@ -1012,7 +1012,7 @@ class MainWindow(QMainWindow):
         self._missed_scan_counts = {}
         self._last_displayed_name = ""
         self._last_displayed_face_ts = 0
-        self._lcd = lcd_status.LcdStatusDisplay() if lcd_status else None
+        self._lcd = lcd_status.LcdStatusDisplay() if (lcd_status and os.environ.get("CLASSROOM_APP_LCD") == "1") else None
         self._lcd_timer = None
 
         self._setup_ui()
