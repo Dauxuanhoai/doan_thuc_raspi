@@ -402,13 +402,13 @@ class CameraThread(QThread):
 
                     if sid:
                         last_scan = self._scan_cooldown.get(sid, 0)
-                        if now_ts - last_scan > self._scan_cooldown.get(f"{sid}_interval", 5):
+                        if self.current_session_id and now_ts - last_scan > self._scan_cooldown.get(f"{sid}_interval", 5):
                             self._scan_cooldown[sid] = now_ts
                             self.face_detected.emit(sid, name, conf)
-                            if self.current_session_id:
-                                db.mark_present(sid, self.current_session_id)
-                                db.log_scan(sid, self.current_session_id, "present")
-                        self._last_face_boxes.append((x, y, w, h, name, conf, "present"))
+                            db.mark_present(sid, self.current_session_id)
+                            db.log_scan(sid, self.current_session_id, "present")
+                        box_status = "present" if self.current_session_id else "scanning"
+                        self._last_face_boxes.append((x, y, w, h, name, conf, box_status))
                     else:
                         self._last_face_boxes.append((x, y, w, h, "Unknown", conf, "unknown"))
 
@@ -425,7 +425,9 @@ class CameraThread(QThread):
 
     def stop(self):
         self.running = False
-        self.wait(2000)
+        if not self.wait(1200):
+            self.terminate()
+            self.wait(500)
 
 
 # ─── Dialogs ──────────────────────────────────────────────────────────────────
@@ -1297,6 +1299,10 @@ class MainWindow(QMainWindow):
         self.cam_status_badge = QLabel("● OFFLINE")
         self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
         cam_title_row.addWidget(self.cam_status_badge)
+        self.btn_toggle_camera = QPushButton("▶  Bật Camera")
+        self.btn_toggle_camera.setObjectName("primary")
+        self.btn_toggle_camera.clicked.connect(self._toggle_camera_preview)
+        cam_title_row.addWidget(self.btn_toggle_camera)
         cam_layout.addLayout(cam_title_row)
 
         self.camera_label = QLabel()
@@ -1748,6 +1754,46 @@ class MainWindow(QMainWindow):
 
     # ── Camera & Session ───────────────────────────────────────────────────────
 
+    def _start_camera_preview(self):
+        if self.camera_thread and self.camera_thread.running:
+            return True
+        self.camera_thread = CameraThread(mode="monitor")
+        if self.current_session_id:
+            self.camera_thread.set_session(self.current_session_id)
+        self.camera_thread.frame_ready.connect(self._update_camera_frame)
+        self.camera_thread.face_detected.connect(self._on_face_detected)
+        self.camera_thread.status_update.connect(self._on_cam_status)
+        self.camera_thread.start()
+        self.cam_status_badge.setText("● ĐANG MỞ")
+        self.cam_status_badge.setStyleSheet(f"color: {DARK['yellow']}; font-size: 11px; font-weight: 700;")
+        self.btn_toggle_camera.setText("⏹  Tắt Camera")
+        self.btn_toggle_camera.setObjectName("danger")
+        self.btn_toggle_camera.setStyle(self.btn_toggle_camera.style())
+        self.camera_label.setText("📷\n\nĐang mở camera...")
+        self.scan_log_label.setText("Camera đang bật. Chỉ ghi điểm danh khi tiết học bắt đầu.")
+        self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
+        return True
+
+    def _stop_camera_preview(self):
+        if self.camera_thread:
+            self.camera_thread.stop()
+            self.camera_thread = None
+        self.cam_status_badge.setText("● OFFLINE")
+        self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
+        self.btn_toggle_camera.setText("▶  Bật Camera")
+        self.btn_toggle_camera.setObjectName("primary")
+        self.btn_toggle_camera.setStyle(self.btn_toggle_camera.style())
+        self.camera_label.clear()
+        self.camera_label.setText("📷\n\nCamera chưa được bật\nCó thể bật bất cứ lúc nào để xem trước")
+        self.scan_log_label.setText("Nhật ký quét: —")
+        self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
+
+    def _toggle_camera_preview(self):
+        if self.camera_thread and self.camera_thread.running:
+            self._stop_camera_preview()
+        else:
+            self._start_camera_preview()
+
     def _toggle_session(self):
         if not self.session_active:
             self._start_session()
@@ -1755,21 +1801,8 @@ class MainWindow(QMainWindow):
             self._end_session()
 
     def _start_session(self):
-        state = self._get_time_state()
-        if state["type"] != "period":
-            msg = "Đang ra chơi, không cần điểm danh." if state["type"] == "break" else "Hiện không có tiết trong khung giờ đã cài đặt."
-            self.session_info_lbl.setText(msg)
-            self.session_info_lbl.setStyleSheet(f"color: {DARK['yellow']}; font-size: 12px;")
-            self.camera_label.setText(f"📷\n\n{msg}")
-            self.cam_status_badge.setText("● OFFLINE")
-            self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
-            return
-
         today = date.today().isoformat()
-        period = state["period"]
-        idx = self.period_combo.findData(period)
-        if idx >= 0:
-            self.period_combo.setCurrentIndex(idx)
+        period = self.period_combo.currentData() or 1
         session = db.get_or_create_session(today, period)
         self.current_session_id = session["id"]
         self.session_active = True
@@ -1783,17 +1816,12 @@ class MainWindow(QMainWindow):
         )
         self.session_info_lbl.setStyleSheet(f"color: {DARK['green']}; font-size: 12px;")
 
-        # Start camera
-        self.camera_thread = CameraThread(mode="monitor")
-        self.camera_thread.set_session(self.current_session_id)
-        self.camera_thread.frame_ready.connect(self._update_camera_frame)
-        self.camera_thread.face_detected.connect(self._on_face_detected)
-        self.camera_thread.status_update.connect(self._on_cam_status)
-        self.camera_thread.start()
-
-        self.cam_status_badge.setText("● ĐANG MỞ")
-        self.cam_status_badge.setStyleSheet(f"color: {DARK['yellow']}; font-size: 11px; font-weight: 700;")
-        self.camera_label.setText("📷\n\nĐang mở camera...")
+        if self.camera_thread and self.camera_thread.running:
+            self.camera_thread.set_session(self.current_session_id)
+        else:
+            self._start_camera_preview()
+            if self.camera_thread:
+                self.camera_thread.set_session(self.current_session_id)
         db.update_session_status(self.current_session_id, "active")
 
         self._refresh_attendance_table()
@@ -1814,8 +1842,7 @@ class MainWindow(QMainWindow):
 
     def _end_session(self):
         if self.camera_thread:
-            self.camera_thread.stop()
-            self.camera_thread = None
+            self.camera_thread.set_session(None)
 
         if self.current_session_id:
             db.finalize_absent_for_session(self.current_session_id)
@@ -1827,9 +1854,11 @@ class MainWindow(QMainWindow):
         self.btn_start_session.setStyle(self.btn_start_session.style())
         self.session_info_lbl.setText("Tiết học đã kết thúc")
         self.session_info_lbl.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 12px;")
-        self.cam_status_badge.setText("● OFFLINE")
-        self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
-        self.camera_label.setText("📷\n\nCamera đã tắt")
+        if self.camera_thread and self.camera_thread.running:
+            self.scan_log_label.setText("Tiết học đã kết thúc. Camera vẫn đang bật để xem trước.")
+            self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
+        else:
+            self.camera_label.setText("📷\n\nCamera chưa được bật\nCó thể bật bất cứ lúc nào để xem trước")
         if hasattr(self, '_att_timer'):
             self._att_timer.stop()
         if self._absence_timer:
