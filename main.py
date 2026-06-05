@@ -6,6 +6,7 @@ import numpy as np
 import subprocess
 import platform
 from datetime import datetime, date, time, timedelta
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFrame, QScrollArea, QDialog, QLineEdit,
@@ -40,6 +41,8 @@ except Exception:
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 APP_VERSION = "1.0.0"
+LCD_COMMAND_PATH = Path("/tmp/classroom_app_command.json")
+LCD_STATE_PATH = Path("/tmp/classroom_app_state.json")
 
 DARK = {
     "bg":          "#0F1923",
@@ -1014,14 +1017,18 @@ class MainWindow(QMainWindow):
         self._last_displayed_face_ts = 0
         self._lcd = lcd_status.LcdStatusDisplay() if (lcd_status and os.environ.get("CLASSROOM_APP_LCD") == "1") else None
         self._lcd_timer = None
+        self._lcd_command_timer = None
+        self._last_lcd_command_id = None
 
         self._setup_ui()
         self._sync_period_combo()
         self._setup_status_bar()
         self._start_clock()
         self._start_lcd_status()
+        self._start_lcd_command_bridge()
         self._refresh_student_list()
         self._refresh_dashboard()
+        self._write_lcd_control_state()
 
     def _setup_ui(self):
         central = QWidget()
@@ -1601,6 +1608,47 @@ class MainWindow(QMainWindow):
         self._lcd_timer.start(2000)
         self._update_lcd_status()
 
+    def _start_lcd_command_bridge(self):
+        self._lcd_command_timer = QTimer(self)
+        self._lcd_command_timer.timeout.connect(self._poll_lcd_command)
+        self._lcd_command_timer.start(500)
+
+    def _write_lcd_control_state(self):
+        try:
+            state = {
+                "running": True,
+                "session_active": bool(self.session_active),
+                "session_id": self.current_session_id,
+                "period": self.period_combo.currentData() if hasattr(self, "period_combo") else None,
+                "updated_at": datetime.now().timestamp(),
+            }
+            tmp = LCD_STATE_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state), encoding="utf-8")
+            tmp.replace(LCD_STATE_PATH)
+        except Exception:
+            pass
+
+    def _poll_lcd_command(self):
+        if not LCD_COMMAND_PATH.exists():
+            self._write_lcd_control_state()
+            return
+        try:
+            data = json.loads(LCD_COMMAND_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        command_id = data.get("id")
+        if command_id and command_id == self._last_lcd_command_id:
+            return
+        self._last_lcd_command_id = command_id
+        action = data.get("action")
+        if action == "start_session":
+            if not self.session_active:
+                self._start_session()
+        elif action == "stop_session":
+            if self.session_active:
+                self._end_session()
+        self._write_lcd_control_state()
+
     def _update_lcd_status(self):
         if not self._lcd:
             return
@@ -1829,6 +1877,7 @@ class MainWindow(QMainWindow):
         self._refresh_attendance_table()
         self.statusBar().showMessage(f"▶ Tiết {period} bắt đầu — {datetime.now().strftime('%H:%M:%S')}")
         self._update_lcd_status()
+        self._write_lcd_control_state()
 
         # Auto refresh attendance every 5s
         self._att_timer = QTimer(self)
@@ -1869,6 +1918,7 @@ class MainWindow(QMainWindow):
         self._refresh_dashboard()
         self.statusBar().showMessage(f"⏹ Tiết học kết thúc — {datetime.now().strftime('%H:%M:%S')}")
         self._update_lcd_status()
+        self._write_lcd_control_state()
 
     def _update_camera_frame(self, frame):
         self.cam_status_badge.setText("● LIVE")

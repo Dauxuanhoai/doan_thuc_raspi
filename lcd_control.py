@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import fcntl
+import json
 import os
 import re
 import select
@@ -17,6 +18,8 @@ APP_MAIN = APP_DIR / "main.py"
 APP_LOG = APP_DIR / "app.log"
 FB_PATH = "/dev/fb1"
 TOUCH_PATH = "/dev/input/event0"
+COMMAND_PATH = Path("/tmp/classroom_app_command.json")
+STATE_PATH = Path("/tmp/classroom_app_state.json")
 RUNUSER = "/usr/sbin/runuser" if os.path.exists("/usr/sbin/runuser") else "runuser"
 W, H = 480, 320
 
@@ -125,6 +128,27 @@ class Touch:
         y = self.map_axis(sy, CAL_Y_MIN, CAL_Y_MAX, H)
         return x, y
 
+    def candidate_points(self):
+        rx = self.map_axis(self.raw_x, 0, 4095, W)
+        ry = self.map_axis(self.raw_y, 0, 4095, H)
+        points = [
+            self.map_point(),
+            (rx, ry),
+            (W - 1 - rx, ry),
+            (rx, H - 1 - ry),
+            (W - 1 - rx, H - 1 - ry),
+            (int(ry * (W - 1) / max(1, H - 1)), int(rx * (H - 1) / max(1, W - 1))),
+            (W - 1 - int(ry * (W - 1) / max(1, H - 1)), int(rx * (H - 1) / max(1, W - 1))),
+            (int(ry * (W - 1) / max(1, H - 1)), H - 1 - int(rx * (H - 1) / max(1, W - 1))),
+        ]
+        unique = []
+        for x, y in points:
+            x = max(0, min(W - 1, int(x)))
+            y = max(0, min(H - 1, int(y)))
+            if (x, y) not in unique:
+                unique.append((x, y))
+        return unique
+
 
 class LcdUi:
     def __init__(self):
@@ -137,6 +161,7 @@ class LcdUi:
         self.shift = False
         self.message = ""
         self.last_scan = 0
+        self.last_touch = None
         self.running = True
         self.font_big = self.load_font(32, True)
         self.font_mid = self.load_font(23, True)
@@ -165,12 +190,35 @@ class LcdUi:
                     args = [p.decode("utf-8", "ignore") for p in f.read().split(b"\0") if p]
             except OSError:
                 continue
-            if len(args) >= 2 and Path(args[0]).name.startswith("python") and app_path in args:
-                pids.append(int(entry))
+            if len(args) >= 2 and Path(args[0]).name.startswith("python"):
+                try:
+                    cwd = os.readlink(f"/proc/{entry}/cwd")
+                except OSError:
+                    cwd = ""
+                if app_path in args or (Path(args[-1]).name == "main.py" and cwd == str(APP_DIR)):
+                    pids.append(int(entry))
         return pids
 
     def app_running(self):
         return bool(self.app_pids())
+
+    def app_state(self):
+        if not self.app_running():
+            return {"running": False, "session_active": False, "period": None}
+        try:
+            data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            if time.time() - float(data.get("updated_at", 0)) > 5:
+                data["session_active"] = False
+            data["running"] = True
+            return data
+        except Exception:
+            return {"running": True, "session_active": False, "period": None}
+
+    def write_app_command(self, action):
+        data = {"id": time.time(), "action": action}
+        tmp = COMMAND_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(COMMAND_PATH)
 
     def ip_addr(self):
         out = run(["hostname", "-I"], timeout=2)
@@ -185,6 +233,7 @@ class LcdUi:
 
     def scan_wifi(self):
         self.message = "Scanning WiFi..."
+        self.last_scan = time.time()
         self.render(force=True)
         run(["nmcli", "dev", "wifi", "rescan"], timeout=8)
         out = run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"], timeout=8)
@@ -202,13 +251,11 @@ class LcdUi:
             security = parts[2] if len(parts) > 2 else ""
             nets.append({"ssid": ssid, "signal": signal, "security": security})
         self.networks = nets[:8]
-        self.last_scan = time.time()
         self.message = ""
 
-    def start_app(self):
+    def launch_app(self):
         if self.app_running():
-            self.message = "App already running"
-            return
+            return True
         if not os.path.exists("/tmp/.X11-unix/X0"):
             self.message = "Starting desktop..."
             self.render(force=True)
@@ -218,21 +265,27 @@ class LcdUi:
         cmd = [RUNUSER, "-u", "hoaidau", "--", "setsid", "env", "DISPLAY=:0",
                "XAUTHORITY=/home/hoaidau/.Xauthority", "python3", str(APP_MAIN)]
         popen_detached(cmd, cwd=str(APP_DIR), stdout_path=str(APP_LOG))
-        self.message = "App started"
+        for _ in range(20):
+            if self.app_running():
+                return True
+            time.sleep(0.25)
+        return self.app_running()
+
+    def start_app(self):
+        self.message = "Opening app..."
+        self.render(force=True)
+        if not self.launch_app():
+            self.message = "Cannot open app"
+            return
+        self.write_app_command("start_session")
+        self.message = "Start sent"
 
     def stop_app(self):
-        for pid in self.app_pids():
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
-        time.sleep(1)
-        for pid in self.app_pids():
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-        self.message = "App stopped"
+        if not self.app_running():
+            self.message = "App not running"
+            return
+        self.write_app_command("stop_session")
+        self.message = "Stop sent"
 
     def connect_wifi(self):
         ssid = self.selected_ssid
@@ -264,19 +317,41 @@ class LcdUi:
         d.text((350, 18), datetime.now().strftime("%H:%M:%S"), fill=(235, 245, 250), font=self.font)
 
     def render_home(self, d):
-        self.header(d, "LCD Control")
-        app = "RUNNING" if self.app_running() else "STOPPED"
-        app_color = (0, 230, 118) if app == "RUNNING" else (255, 82, 82)
-        d.rounded_rectangle((12, 66, 468, 158), radius=8, fill=(18, 32, 48), outline=(58, 88, 116), width=2)
-        d.text((24, 78), f"App: {app}", fill=app_color, font=self.font_mid)
-        d.text((24, 108), f"WiFi: {self.wifi_name()[:28]}", fill=(235, 245, 250), font=self.font)
-        d.text((24, 132), f"IP: {self.ip_addr()}", fill=(255, 214, 0), font=self.font)
-        self.button(d, (12, 174, 226, 228), "START APP", "start", fill=(18, 72, 48))
-        self.button(d, (254, 174, 468, 228), "STOP APP", "stop", fill=(80, 30, 35))
-        self.button(d, (12, 242, 226, 300), "WIFI", "wifi")
-        self.button(d, (254, 242, 468, 300), "REFRESH", "refresh")
+        self.header(d, "Classroom Panel")
+        state = self.app_state()
+        if not state["running"]:
+            app = "APP OFF"
+            line = "Tap START to open app and begin"
+            action_label = "START APP"
+            action = "start"
+            action_fill = (18, 88, 54)
+            app_color = (255, 82, 82)
+        elif state.get("session_active"):
+            app = "ATTENDANCE ON"
+            period = state.get("period") or "-"
+            line = f"Period {period} is running"
+            action_label = "STOP APP"
+            action = "stop"
+            action_fill = (100, 28, 38)
+            app_color = (0, 230, 118)
+        else:
+            app = "APP READY"
+            line = "Tap START to begin attendance"
+            action_label = "START APP"
+            action = "start"
+            action_fill = (18, 88, 54)
+            app_color = (255, 214, 0)
+
+        d.rounded_rectangle((12, 64, 468, 146), radius=8, fill=(18, 32, 48), outline=(58, 88, 116), width=2)
+        d.text((24, 74), app, fill=app_color, font=self.font_mid)
+        d.text((24, 105), line[:36], fill=(235, 245, 250), font=self.font)
+        d.text((24, 126), f"WiFi: {self.wifi_name()[:20]}   IP: {self.ip_addr()}", fill=(255, 214, 0), font=self.font_small)
+
+        self.button(d, (14, 160, 466, 232), action_label, action, fill=action_fill)
+        self.button(d, (14, 244, 226, 304), "WIFI", "wifi", fill=(25, 52, 82))
+        self.button(d, (254, 244, 466, 304), "REFRESH", "refresh")
         if self.message:
-            d.text((18, 304), self.message[:56], fill=(255, 214, 0), font=self.font_small)
+            d.text((18, 306), self.message[:44], fill=(255, 214, 0), font=self.font_small)
 
     def render_wifi(self, d):
         self.header(d, "WiFi Networks")
@@ -372,11 +447,16 @@ class LcdUi:
         self.render(force=True)
 
     def click(self, x, y):
-        for rect, action in list(self.buttons):
-            x1, y1, x2, y2 = rect
-            if x1 <= x <= x2 and y1 <= y <= y2:
-                self.handle(action)
-                return
+        self.last_touch = (x, y)
+        points = self.touch.candidate_points() if self.touch else [(x, y)]
+        for px, py in points:
+            for rect, action in list(self.buttons):
+                x1, y1, x2, y2 = rect
+                if x1 <= px <= x2 and y1 <= py <= y2:
+                    self.handle(action)
+                    return
+        self.message = f"Touch {x},{y}"
+        self.render(force=True)
 
     def loop(self):
         last_render = 0
