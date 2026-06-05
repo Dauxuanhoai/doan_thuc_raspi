@@ -128,27 +128,6 @@ class Touch:
         y = self.map_axis(sy, CAL_Y_MIN, CAL_Y_MAX, H)
         return x, y
 
-    def candidate_points(self):
-        rx = self.map_axis(self.raw_x, 0, 4095, W)
-        ry = self.map_axis(self.raw_y, 0, 4095, H)
-        points = [
-            self.map_point(),
-            (rx, ry),
-            (W - 1 - rx, ry),
-            (rx, H - 1 - ry),
-            (W - 1 - rx, H - 1 - ry),
-            (int(ry * (W - 1) / max(1, H - 1)), int(rx * (H - 1) / max(1, W - 1))),
-            (W - 1 - int(ry * (W - 1) / max(1, H - 1)), int(rx * (H - 1) / max(1, W - 1))),
-            (int(ry * (W - 1) / max(1, H - 1)), H - 1 - int(rx * (H - 1) / max(1, W - 1))),
-        ]
-        unique = []
-        for x, y in points:
-            x = max(0, min(W - 1, int(x)))
-            y = max(0, min(H - 1, int(y)))
-            if (x, y) not in unique:
-                unique.append((x, y))
-        return unique
-
 
 class LcdUi:
     def __init__(self):
@@ -327,9 +306,9 @@ class LcdUi:
             action_fill = (18, 88, 54)
             app_color = (255, 82, 82)
         elif state.get("session_active"):
-            app = "ATTENDANCE ON"
+            app = "ATTENDANCE ON" if state.get("attendance_active") else "LIVE PREVIEW"
             period = state.get("period") or "-"
-            line = f"Period {period} is running"
+            line = f"Period {period} is running" if state.get("attendance_active") else "Camera on, no attendance"
             action_label = "STOP APP"
             action = "stop"
             action_fill = (100, 28, 38)
@@ -448,13 +427,11 @@ class LcdUi:
 
     def click(self, x, y):
         self.last_touch = (x, y)
-        points = self.touch.candidate_points() if self.touch else [(x, y)]
-        for px, py in points:
-            for rect, action in list(self.buttons):
-                x1, y1, x2, y2 = rect
-                if x1 <= px <= x2 and y1 <= py <= y2:
-                    self.handle(action)
-                    return
+        for rect, action in list(self.buttons):
+            x1, y1, x2, y2 = rect
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                self.handle(action)
+                return
         self.message = f"Touch {x},{y}"
         self.render(force=True)
 

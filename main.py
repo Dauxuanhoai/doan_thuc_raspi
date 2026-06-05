@@ -358,11 +358,14 @@ class CameraThread(QThread):
     def _close_camera(self, camera_type, camera):
         if not camera:
             return
-        if camera_type == "picamera2":
-            camera.stop()
-            camera.close()
-        else:
-            camera.release()
+        try:
+            if camera_type == "picamera2":
+                camera.stop()
+                camera.close()
+            else:
+                camera.release()
+        except Exception as exc:
+            print(f"Dong camera loi: {exc}")
 
     def run(self):
         self.running = True
@@ -373,62 +376,65 @@ class CameraThread(QThread):
             self.running = False
             return
 
-        while self.running:
-            ret, frame = self._read_camera_frame(camera_type, camera)
-            if not ret:
-                self.msleep(20)
-                continue
-            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        try:
+            while self.running:
+                ret, frame = self._read_camera_frame(camera_type, camera)
+                if not ret:
+                    self.msleep(20)
+                    continue
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
 
-            now_ts = datetime.now().timestamp()
-            if now_ts - self._last_process_ts >= self._process_interval:
-                self._last_process_ts = now_ts
-                small = cv2.resize(frame, None, fx=self._detect_scale, fy=self._detect_scale)
-                gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-                faces_small = fm.detect_faces(gray_small)
-                self._last_face_boxes = []
-                self._last_face_ts = now_ts
+                now_ts = datetime.now().timestamp()
+                if now_ts - self._last_process_ts >= self._process_interval:
+                    self._last_process_ts = now_ts
+                    small = cv2.resize(frame, None, fx=self._detect_scale, fy=self._detect_scale)
+                    gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                    faces_small = fm.detect_faces(gray_small)
+                    self._last_face_boxes = []
+                    self._last_face_ts = now_ts
 
-                for (sx, sy, sw, sh) in faces_small:
-                    x = int(sx / self._detect_scale)
-                    y = int(sy / self._detect_scale)
-                    w = int(sw / self._detect_scale)
-                    h = int(sh / self._detect_scale)
+                    for (sx, sy, sw, sh) in faces_small:
+                        x = int(sx / self._detect_scale)
+                        y = int(sy / self._detect_scale)
+                        w = int(sw / self._detect_scale)
+                        h = int(sh / self._detect_scale)
 
-                    if self.mode == "capture":
-                        self._last_face_boxes.append((x, y, w, h, None, 0, "scanning"))
-                        continue
+                        if self.mode == "capture":
+                            self._last_face_boxes.append((x, y, w, h, None, 0, "scanning"))
+                            continue
 
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    enc = fm.extract_encoding_from_frame(gray, x, y, w, h)
-                    sid, name, conf = fm.recognize_face(enc)
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        enc = fm.extract_encoding_from_frame(gray, x, y, w, h)
+                        sid, name, conf = fm.recognize_face(enc)
 
-                    if sid:
-                        last_scan = self._scan_cooldown.get(sid, 0)
-                        if self.current_session_id and now_ts - last_scan > self._scan_cooldown.get(f"{sid}_interval", 5):
-                            self._scan_cooldown[sid] = now_ts
-                            self.face_detected.emit(sid, name, conf)
-                            db.mark_present(sid, self.current_session_id)
-                            db.log_scan(sid, self.current_session_id, "present")
-                        box_status = "present" if self.current_session_id else "scanning"
-                        self._last_face_boxes.append((x, y, w, h, name, conf, box_status))
-                    else:
-                        self._last_face_boxes.append((x, y, w, h, "Unknown", conf, "unknown"))
+                        if sid:
+                            last_scan = self._scan_cooldown.get(sid, 0)
+                            if self.current_session_id and now_ts - last_scan > self._scan_cooldown.get(f"{sid}_interval", 5):
+                                self._scan_cooldown[sid] = now_ts
+                                self.face_detected.emit(sid, name, conf)
+                                db.mark_present(sid, self.current_session_id)
+                                db.log_scan(sid, self.current_session_id, "present")
+                            box_status = "present" if self.current_session_id else "scanning"
+                            self._last_face_boxes.append((x, y, w, h, name, conf, box_status))
+                        else:
+                            self._last_face_boxes.append((x, y, w, h, "Unknown", conf, "unknown"))
 
-            if now_ts - self._last_face_ts <= 1.2:
-                for x, y, w, h, name, conf, status in self._last_face_boxes:
-                    fm.draw_face_box(frame, x, y, w, h, name, conf, status)
+                if now_ts - self._last_face_ts <= 1.2:
+                    for x, y, w, h, name, conf, status in self._last_face_boxes:
+                        fm.draw_face_box(frame, x, y, w, h, name, conf, status)
 
-            if now_ts - self._last_display_ts >= self._display_interval:
-                self._last_display_ts = now_ts
-                self.frame_ready.emit(frame)
-            self.msleep(10)
+                if now_ts - self._last_display_ts >= self._display_interval:
+                    self._last_display_ts = now_ts
+                    self.frame_ready.emit(frame)
+                self.msleep(10)
+        except Exception as exc:
+            self.status_update.emit(f"⚠ Camera lỗi: {exc}")
 
         self._close_camera(camera_type, camera)
 
     def stop(self):
         self.running = False
-        if not self.wait(1200):
+        if not self.wait(2500):
             self.terminate()
             self.wait(500)
 
@@ -1228,7 +1234,7 @@ class MainWindow(QMainWindow):
         session_layout.addWidget(self.attendance_summary_lbl)
         session_layout.addStretch()
 
-        btn_go_cam = QPushButton("📹  Vào Điểm Danh")
+        btn_go_cam = QPushButton("Vào Điểm Danh")
         btn_go_cam.setObjectName("primary")
         btn_go_cam.clicked.connect(lambda: self._switch_page(1))
         session_layout.addWidget(btn_go_cam)
@@ -1250,7 +1256,8 @@ class MainWindow(QMainWindow):
         hdr.addWidget(title)
         hdr.addStretch()
 
-        self.btn_settings_cam = QPushButton("⚙  Cài Đặt")
+        self.btn_settings_cam = QPushButton("Cài Đặt")
+        self.btn_settings_cam.setMinimumHeight(36)
         self.btn_settings_cam.clicked.connect(self._open_settings)
         hdr.addWidget(self.btn_settings_cam)
         layout.addLayout(hdr)
@@ -1308,6 +1315,7 @@ class MainWindow(QMainWindow):
         cam_title_row.addWidget(self.cam_status_badge)
         self.btn_toggle_camera = QPushButton("▶  Bật Camera")
         self.btn_toggle_camera.setObjectName("primary")
+        self.btn_toggle_camera.setMinimumSize(132, 36)
         self.btn_toggle_camera.clicked.connect(self._toggle_camera_preview)
         cam_title_row.addWidget(self.btn_toggle_camera)
         cam_layout.addLayout(cam_title_row)
@@ -1364,7 +1372,7 @@ class MainWindow(QMainWindow):
         self.att_table.verticalHeader().setVisible(False)
         att_layout.addWidget(self.att_table)
 
-        btn_refresh_att = QPushButton("🔄  Làm Mới")
+        btn_refresh_att = QPushButton("Làm Mới")
         btn_refresh_att.clicked.connect(self._refresh_attendance_table)
         att_layout.addWidget(btn_refresh_att)
 
@@ -1400,20 +1408,20 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         hdr = QHBoxLayout()
-        title = QLabel("👥  Quản Lý Sinh Viên")
+        title = QLabel("Quản Lý Sinh Viên")
         title.setObjectName("title")
         hdr.addWidget(title)
         hdr.addStretch()
 
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("🔍 Tìm kiếm sinh viên...")
+        self.search_edit.setPlaceholderText("Tìm kiếm sinh viên...")
         self.search_edit.setMaximumWidth(240)
         self.search_edit.textChanged.connect(self._filter_students)
         hdr.addWidget(self.search_edit)
 
-        btn_add = QPushButton("➕  Thêm Sinh Viên")
+        btn_add = QPushButton("Thêm Sinh Viên")
         btn_add.setObjectName("primary")
-        btn_add.setMinimumWidth(170)
+        btn_add.setMinimumSize(170, 38)
         btn_add.clicked.connect(self._add_student)
         hdr.addWidget(btn_add)
         layout.addLayout(hdr)
@@ -1445,7 +1453,7 @@ class MainWindow(QMainWindow):
         self.students_table.setColumnWidth(0, 72)
         self.students_table.setColumnWidth(3, 150)
         self.students_table.setColumnWidth(4, 125)
-        self.students_table.setColumnWidth(5, 170)
+        self.students_table.setColumnWidth(5, 190)
         self.students_table.verticalHeader().setDefaultSectionSize(60)
         self.students_table.verticalHeader().setMinimumSectionSize(60)
         self.students_table.verticalHeader().setVisible(False)
@@ -1466,7 +1474,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         hdr = QHBoxLayout()
-        title = QLabel("📊  Báo Cáo & Xuất File")
+        title = QLabel("Báo Cáo & Xuất File")
         title.setObjectName("title")
         hdr.addWidget(title)
         layout.addLayout(hdr)
@@ -1479,7 +1487,7 @@ class MainWindow(QMainWindow):
         dl.setContentsMargins(20, 20, 20, 20)
 
         day_form = QHBoxLayout()
-        day_form.addWidget(QLabel("📅 Chọn ngày:"))
+        day_form.addWidget(QLabel("Chọn ngày:"))
         self.export_date = QComboBox()
         self._populate_date_combo()
         day_form.addWidget(self.export_date)
@@ -1491,9 +1499,9 @@ class MainWindow(QMainWindow):
         day_form.addStretch()
         dl.addLayout(day_form)
 
-        btn_export_day = QPushButton("📥  Xuất Báo Cáo Theo Ngày")
+        btn_export_day = QPushButton("Xuất Báo Cáo Theo Ngày")
         btn_export_day.setObjectName("primary")
-        btn_export_day.setMaximumWidth(240)
+        btn_export_day.setMinimumSize(230, 38)
         btn_export_day.clicked.connect(self._export_by_date)
         dl.addWidget(btn_export_day)
 
@@ -1501,14 +1509,15 @@ class MainWindow(QMainWindow):
         self.export_preview.setHorizontalHeaderLabels(["Mã SV", "Họ Tên", "Tiết 1", "Tiết 2", "Tiết 3"])
         self.export_preview.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.export_preview.verticalHeader().setVisible(False)
-        dl.addWidget(QLabel("👁  Xem trước:"))
+        dl.addWidget(QLabel("Xem trước:"))
         dl.addWidget(self.export_preview)
 
-        btn_preview = QPushButton("🔍  Xem Trước Dữ Liệu")
+        btn_preview = QPushButton("Xem Trước Dữ Liệu")
+        btn_preview.setMinimumHeight(36)
         btn_preview.clicked.connect(self._preview_attendance)
         dl.addWidget(btn_preview)
 
-        tabs.addTab(day_tab, "📅 Theo Ngày")
+        tabs.addTab(day_tab, "Theo Ngày")
 
         # ── Tab: Báo cáo tháng ────────────────────────────────────────────────
         month_tab = QWidget()
@@ -1516,7 +1525,7 @@ class MainWindow(QMainWindow):
         ml.setContentsMargins(20, 20, 20, 20)
 
         month_form = QHBoxLayout()
-        month_form.addWidget(QLabel("📅 Tháng:"))
+        month_form.addWidget(QLabel("Tháng:"))
         self.month_combo = QComboBox()
         for m in range(1, 13):
             self.month_combo.addItem(f"Tháng {m}", m)
@@ -1536,14 +1545,14 @@ class MainWindow(QMainWindow):
         month_form.addStretch()
         ml.addLayout(month_form)
 
-        btn_export_month = QPushButton("📥  Xuất Báo Cáo Tháng")
+        btn_export_month = QPushButton("Xuất Báo Cáo Tháng")
         btn_export_month.setObjectName("primary")
-        btn_export_month.setMaximumWidth(220)
+        btn_export_month.setMinimumSize(220, 38)
         btn_export_month.clicked.connect(self._export_monthly)
         ml.addWidget(btn_export_month)
         ml.addStretch()
 
-        tabs.addTab(month_tab, "📆 Báo Cáo Tháng")
+        tabs.addTab(month_tab, "Báo Cáo Tháng")
 
         layout.addWidget(tabs)
         return page
@@ -1554,13 +1563,13 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        title = QLabel("⚙  Cài Đặt")
+        title = QLabel("Cài Đặt")
         title.setObjectName("title")
         layout.addWidget(title)
 
-        btn_open = QPushButton("⚙  Mở Cài Đặt Chi Tiết")
+        btn_open = QPushButton("Mở Cài Đặt Chi Tiết")
         btn_open.setObjectName("primary")
-        btn_open.setMaximumWidth(220)
+        btn_open.setMinimumSize(220, 38)
         btn_open.clicked.connect(self._open_settings)
         layout.addWidget(btn_open)
 
@@ -1618,6 +1627,7 @@ class MainWindow(QMainWindow):
             state = {
                 "running": True,
                 "session_active": bool(self.session_active),
+                "attendance_active": bool(self.current_session_id),
                 "session_id": self.current_session_id,
                 "period": self.period_combo.currentData() if hasattr(self, "period_combo") else None,
                 "updated_at": datetime.now().timestamp(),
@@ -1637,6 +1647,12 @@ class MainWindow(QMainWindow):
         except Exception:
             return
         command_id = data.get("id")
+        try:
+            if time.time() - float(command_id or 0) > 10:
+                self._write_lcd_control_state()
+                return
+        except Exception:
+            pass
         if command_id and command_id == self._last_lcd_command_id:
             self._write_lcd_control_state()
             return
@@ -1822,6 +1838,9 @@ class MainWindow(QMainWindow):
         self.btn_toggle_camera.setText("⏹  Tắt Camera")
         self.btn_toggle_camera.setObjectName("danger")
         self.btn_toggle_camera.setStyle(self.btn_toggle_camera.style())
+        self.btn_toggle_camera.setMinimumSize(132, 36)
+        self.btn_toggle_camera.show()
+        self.btn_toggle_camera.update()
         self.camera_label.setText("📷\n\nĐang mở camera...")
         self.scan_log_label.setText("Camera đang bật. Chỉ điểm danh khi bấm Bắt Đầu.")
         self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
@@ -1836,6 +1855,9 @@ class MainWindow(QMainWindow):
         self.btn_toggle_camera.setText("▶  Bật Camera")
         self.btn_toggle_camera.setObjectName("primary")
         self.btn_toggle_camera.setStyle(self.btn_toggle_camera.style())
+        self.btn_toggle_camera.setMinimumSize(132, 36)
+        self.btn_toggle_camera.show()
+        self.btn_toggle_camera.update()
         self.camera_label.clear()
         self.camera_label.setText("📷\n\nCamera chưa được bật\nCó thể bật bất cứ lúc nào để xem trước")
         self.scan_log_label.setText("Nhật ký quét: —")
@@ -1855,19 +1877,24 @@ class MainWindow(QMainWindow):
 
     def _start_session(self):
         today = date.today().isoformat()
-        period = self.period_combo.currentData() or 1
-        session = db.get_or_create_session(today, period)
-        self.current_session_id = session["id"]
+        state = self._get_time_state()
+        period = state.get("period") if state["type"] == "period" else (self.period_combo.currentData() or 1)
+        session = db.get_or_create_session(today, period) if state["type"] == "period" else None
+        self.current_session_id = session["id"] if session else None
         self.session_active = True
 
         settings = db.get_all_settings()
         self.btn_start_session.setText("⏹  Kết Thúc")
         self.btn_start_session.setObjectName("danger")
         self.btn_start_session.setStyle(self.btn_start_session.style())
-        self.session_info_lbl.setText(
-            f"🟢 Đang chạy — Tiết {period}  ({session['start_time']} → {session['end_time']})"
-        )
-        self.session_info_lbl.setStyleSheet(f"color: {DARK['green']}; font-size: 12px;")
+        if session:
+            self.session_info_lbl.setText(
+                f"🟢 Đang điểm danh — Tiết {period}  ({session['start_time']} → {session['end_time']})"
+            )
+            self.session_info_lbl.setStyleSheet(f"color: {DARK['green']}; font-size: 12px;")
+        else:
+            self.session_info_lbl.setText("Camera đang chạy ngoài giờ tiết học — không ghi điểm danh")
+            self.session_info_lbl.setStyleSheet(f"color: {DARK['yellow']}; font-size: 12px;")
 
         if self.camera_thread and self.camera_thread.running:
             self.camera_thread.set_session(self.current_session_id)
@@ -1875,12 +1902,16 @@ class MainWindow(QMainWindow):
             self._start_camera_preview()
             if self.camera_thread:
                 self.camera_thread.set_session(self.current_session_id)
-        db.update_session_status(self.current_session_id, "active")
-        self.scan_log_label.setText("Đang điểm danh tự động khi nhận diện khuôn mặt.")
-        self.scan_log_label.setStyleSheet(f"color: {DARK['green']}; font-size: 11px; padding: 4px;")
+        if self.current_session_id:
+            db.update_session_status(self.current_session_id, "active")
+            self.scan_log_label.setText("Đang điểm danh tự động khi nhận diện khuôn mặt.")
+            self.scan_log_label.setStyleSheet(f"color: {DARK['green']}; font-size: 11px; padding: 4px;")
+        else:
+            self.scan_log_label.setText("Camera đang bật để xem trước. Ngoài giờ tiết nên không ghi điểm danh.")
+            self.scan_log_label.setStyleSheet(f"color: {DARK['yellow']}; font-size: 11px; padding: 4px;")
 
         self._refresh_attendance_table()
-        self.statusBar().showMessage(f"▶ Tiết {period} bắt đầu — {datetime.now().strftime('%H:%M:%S')}")
+        self.statusBar().showMessage(f"▶ Đã bắt đầu — {datetime.now().strftime('%H:%M:%S')}")
         self._update_lcd_status()
         self._write_lcd_control_state()
 
@@ -1892,9 +1923,10 @@ class MainWindow(QMainWindow):
         scan_interval = int(settings.get("scan_interval_seconds", 30))
         self._last_seen_students = {}
         self._missed_scan_counts = {}
-        self._absence_timer = QTimer(self)
-        self._absence_timer.timeout.connect(self._scan_absent_students)
-        self._absence_timer.start(max(5, scan_interval) * 1000)
+        if self.current_session_id:
+            self._absence_timer = QTimer(self)
+            self._absence_timer.timeout.connect(self._scan_absent_students)
+            self._absence_timer.start(max(5, scan_interval) * 1000)
 
     def _end_session(self):
         if self.camera_thread:
@@ -1970,6 +2002,8 @@ class MainWindow(QMainWindow):
     def _auto_check_session_time(self, now):
         """Kiểm tra và tự động đánh vắng theo thời gian"""
         if not self.session_active:
+            return
+        if not self.current_session_id:
             return
         state = self._get_time_state(now)
         current_period = self.period_combo.currentData()
@@ -2166,13 +2200,13 @@ class MainWindow(QMainWindow):
             action_layout.setSpacing(8)
             action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-            btn_edit = QPushButton("✎")
-            btn_edit.setFixedSize(36, 34)
+            btn_edit = QPushButton("Sửa")
+            btn_edit.setFixedSize(74, 34)
             btn_edit.setToolTip("Chỉnh sửa sinh viên")
             btn_edit.clicked.connect(lambda _, s=student: self._edit_student(s))
 
-            btn_del = QPushButton("×")
-            btn_del.setFixedSize(36, 34)
+            btn_del = QPushButton("Xóa")
+            btn_del.setFixedSize(74, 34)
             btn_del.setObjectName("danger")
             btn_del.setToolTip("Xóa sinh viên")
             btn_del.clicked.connect(lambda _, sid=student["student_id"]: self._delete_student(sid))
@@ -2187,14 +2221,24 @@ class MainWindow(QMainWindow):
         self._refresh_student_list(text)
 
     def _add_student(self):
+        was_camera_running = bool(self.camera_thread and self.camera_thread.running)
+        if was_camera_running:
+            self._stop_camera_preview()
         dlg = AddStudentDialog(self)
         dlg.student_added.connect(self._refresh_student_list)
         dlg.exec()
+        if was_camera_running:
+            self._start_camera_preview()
 
     def _edit_student(self, student_data):
+        was_camera_running = bool(self.camera_thread and self.camera_thread.running)
+        if was_camera_running:
+            self._stop_camera_preview()
         dlg = AddStudentDialog(self, student_data=student_data)
         dlg.student_added.connect(self._refresh_student_list)
         dlg.exec()
+        if was_camera_running:
+            self._start_camera_preview()
 
     def _delete_student(self, student_id):
         reply = QMessageBox.question(
@@ -2311,30 +2355,25 @@ class MainWindow(QMainWindow):
 
     def _refresh_settings_display(self):
         s = db.get_all_settings()
-        text = "📋  CẤU HÌNH HIỆN TẠI\n" + "─" * 40 + "\n"
-        labels = {
-            "class_name": "Tên lớp",
-            "total_periods": "Số tiết/ngày",
-            "period_1_start": "Tiết 1 bắt đầu",
-            "period_1_end": "Tiết 1 kết thúc",
-            "break_start": "Nghỉ giải lao bắt đầu",
-            "break_end": "Nghỉ giải lao kết thúc",
-            "period_2_start": "Tiết 2 bắt đầu",
-            "period_2_end": "Tiết 2 kết thúc",
-            "period_3_start": "Tiết 3 bắt đầu",
-            "period_3_end": "Tiết 3 kết thúc",
-            "period_4_start": "Tiết 4 bắt đầu",
-            "period_4_end": "Tiết 4 kết thúc",
-            "period_5_start": "Tiết 5 bắt đầu",
-            "period_5_end": "Tiết 5 kết thúc",
-            "period_6_start": "Tiết 6 bắt đầu",
-            "period_6_end": "Tiết 6 kết thúc",
-            "scan_interval_seconds": "Chu kỳ quét (giây)",
-            "absent_threshold": "Ngưỡng đánh vắng (lần)",
-            "grace_period_minutes": "Thời gian ân hạn (phút)",
-        }
-        for k, v in labels.items():
-            text += f"  {v:35s}: {s.get(k, '')}\n"
+        total = int(s.get("total_periods", 3))
+        lines = [
+            "CAI DAT DANG DUNG",
+            "",
+            f"Lop: {s.get('class_name', '')}",
+            f"So tiet trong ngay: {total}",
+            f"Quet vang moi: {s.get('scan_interval_seconds', '30')} giay",
+            f"Danh vang sau: {s.get('absent_threshold', '3')} lan vang mat",
+            f"An han dau tiet: {s.get('grace_period_minutes', '5')} phut",
+            "",
+            "THOI KHOA BIEU",
+        ]
+        for period in range(1, total + 1):
+            start = s.get(f"period_{period}_start", "--:--")
+            end = s.get(f"period_{period}_end", "--:--")
+            lines.append(f"Tiet {period}: {start} - {end}")
+        if total >= 2:
+            lines.append(f"Nghi giai lao: {s.get('break_start', '--:--')} - {s.get('break_end', '--:--')}")
+        text = "\n".join(lines)
         if hasattr(self, 'settings_display'):
             self.settings_display.setText(text)
 
