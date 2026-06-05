@@ -76,7 +76,7 @@ QWidget {{
 QFrame#card {{
     background-color: {DARK['card']};
     border: 1px solid {DARK['border']};
-    border-radius: 12px;
+    border-radius: 8px;
 }}
 QFrame#sidebar {{
     background-color: {DARK['surface']};
@@ -133,8 +133,9 @@ QPushButton#sidebar_btn {{
     border: none;
     border-radius: 10px;
     text-align: left;
-    padding: 12px 16px;
-    font-size: 13px;
+    padding: 11px 12px;
+    font-size: 12px;
+    min-height: 30px;
 }}
 QPushButton#sidebar_btn:hover {{
     background-color: {DARK['surface2']};
@@ -147,8 +148,9 @@ QPushButton#sidebar_btn_active {{
     border-left: 3px solid {DARK['accent']};
     border-radius: 0px;
     text-align: left;
-    padding: 12px 16px;
-    font-size: 13px;
+    padding: 11px 12px;
+    font-size: 12px;
+    min-height: 30px;
     font-weight: 600;
 }}
 QLineEdit, QTextEdit {{
@@ -157,6 +159,9 @@ QLineEdit, QTextEdit {{
     border-radius: 8px;
     padding: 8px 12px;
     color: {DARK['text']};
+}}
+QLineEdit {{
+    min-height: 28px;
 }}
 QLineEdit:focus, QTextEdit:focus {{
     border-color: {DARK['accent']};
@@ -167,6 +172,7 @@ QComboBox {{
     border-radius: 8px;
     padding: 8px 12px;
     color: {DARK['text']};
+    min-height: 28px;
 }}
 QComboBox::drop-down {{
     border: none;
@@ -1051,11 +1057,11 @@ class MainWindow(QMainWindow):
         fm.load_recognizer()
 
         self.setWindowTitle(f"Hệ thống điểm danh khuôn mặt v{APP_VERSION}")
-        self.setMinimumSize(860, 540)
+        self.setMinimumSize(800, 480)
         screen = QApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
-            self.resize(min(1120, available.width()), min(680, available.height()))
+            self.resize(min(1024, available.width()), min(720, available.height()))
         self.setStyleSheet(STYLESHEET)
 
         self.camera_thread = None
@@ -1093,19 +1099,19 @@ class MainWindow(QMainWindow):
         # ── Sidebar ────────────────────────────────────────────────────────────
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(188)
+        sidebar.setFixedWidth(156)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.setSpacing(2)
 
         # Logo area
         logo_frame = QFrame()
-        logo_frame.setFixedHeight(68)
+        logo_frame.setFixedHeight(64)
         logo_frame.setStyleSheet(f"background-color: {DARK['surface2']}; border-bottom: 1px solid {DARK['border']};")
         logo_layout = QVBoxLayout(logo_frame)
-        logo_layout.setContentsMargins(16, 12, 16, 12)
+        logo_layout.setContentsMargins(12, 10, 12, 10)
         logo_title = QLabel("Điểm danh AI")
-        logo_title.setStyleSheet(f"font-size: 16px; font-weight: 800; color: {DARK['accent']};")
+        logo_title.setStyleSheet(f"font-size: 15px; font-weight: 800; color: {DARK['accent']};")
         logo_sub = QLabel("Nhận diện khuôn mặt")
         logo_sub.setStyleSheet(f"font-size: 10px; color: {DARK['text_dim']};")
         logo_layout.addWidget(logo_title)
@@ -1115,13 +1121,13 @@ class MainWindow(QMainWindow):
         sidebar_layout.addSpacing(8)
 
         nav_label = QLabel("  ĐIỀU HƯỚNG")
-        nav_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 10px; letter-spacing: 2px; padding: 4px 16px;")
+        nav_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 10px; padding: 4px 12px;")
         sidebar_layout.addWidget(nav_label)
 
         self.nav_buttons = []
         nav_items = [
             ("Tổng quan", 0),
-            ("Camera & điểm danh", 1),
+            ("Điểm danh", 1),
             ("Sinh viên", 2),
             ("Báo cáo", 3),
             ("Cài đặt", 4),
@@ -1308,32 +1314,40 @@ class MainWindow(QMainWindow):
         # Session selector
         session_bar = QFrame()
         session_bar.setObjectName("card")
-        session_bar.setMinimumHeight(58)
-        session_bar.setMaximumHeight(72)
-        sb_layout = QHBoxLayout(session_bar)
-        sb_layout.setContentsMargins(16, 8, 16, 8)
+        session_bar.setMinimumHeight(92)
+        session_bar.setMaximumHeight(104)
+        sb_layout = QVBoxLayout(session_bar)
+        sb_layout.setContentsMargins(14, 10, 14, 10)
+        sb_layout.setSpacing(8)
 
-        sb_layout.addWidget(QLabel("Ngày:"))
+        session_controls = QHBoxLayout()
+        session_controls.setSpacing(10)
+        session_controls.addWidget(QLabel("Ngày:"))
         self.date_combo = QComboBox()
         today = date.today().isoformat()
         self.date_combo.addItem(f"Hôm nay ({today})", today)
-        sb_layout.addWidget(self.date_combo)
+        self.date_combo.setMinimumWidth(170)
+        session_controls.addWidget(self.date_combo)
 
-        sb_layout.addWidget(QLabel("   Tiết:"))
+        session_controls.addWidget(QLabel("Tiết:"))
         self.period_combo = QComboBox()
         for i in range(1, 4):
             self.period_combo.addItem(f"Tiết {i}", i)
-        sb_layout.addWidget(self.period_combo)
+        self.period_combo.setMinimumWidth(90)
+        session_controls.addWidget(self.period_combo)
 
         self.btn_start_session = QPushButton("Bắt đầu")
         self.btn_start_session.setObjectName("success")
+        self.btn_start_session.setMinimumSize(120, 44)
         self.btn_start_session.clicked.connect(self._toggle_session)
-        sb_layout.addWidget(self.btn_start_session)
+        session_controls.addWidget(self.btn_start_session)
+        session_controls.addStretch()
+        sb_layout.addLayout(session_controls)
 
         self.session_info_lbl = QLabel("Chưa có tiết học nào đang chạy")
+        self.session_info_lbl.setWordWrap(True)
         self.session_info_lbl.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 12px;")
         sb_layout.addWidget(self.session_info_lbl)
-        sb_layout.addStretch()
 
         layout.addWidget(session_bar)
 
@@ -1497,9 +1511,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(stats_row)
 
         # Table
-        self.students_table = QTableWidget(0, 6)
+        self.students_table = QTableWidget(0, 5)
         self.students_table.setHorizontalHeaderLabels([
-            "Ảnh", "Mã SV", "Họ và Tên", "Khuôn Mặt", "Ngày Thêm", "Thao Tác"
+            "Ảnh", "Mã SV", "Họ và tên", "Khuôn mặt", "Thao tác"
         ])
         header = self.students_table.horizontalHeader()
         header.setStretchLastSection(False)
@@ -1508,11 +1522,10 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         self.students_table.setColumnWidth(0, 72)
-        self.students_table.setColumnWidth(3, 150)
-        self.students_table.setColumnWidth(4, 125)
-        self.students_table.setColumnWidth(5, 190)
+        self.students_table.setColumnWidth(1, 95)
+        self.students_table.setColumnWidth(3, 125)
+        self.students_table.setColumnWidth(4, 170)
         self.students_table.verticalHeader().setDefaultSectionSize(60)
         self.students_table.verticalHeader().setMinimumSectionSize(60)
         self.students_table.verticalHeader().setVisible(False)
@@ -2277,12 +2290,6 @@ class MainWindow(QMainWindow):
             enc_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.students_table.setItem(row, 3, enc_item)
 
-            date_str = student.get("created_at", "")[:10]
-            date_item = QTableWidgetItem(date_str)
-            date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            date_item.setForeground(QColor(DARK['text_dim']))
-            self.students_table.setItem(row, 4, date_item)
-
             # Action buttons
             action_widget = QWidget()
             action_layout = QHBoxLayout(action_widget)
@@ -2303,7 +2310,7 @@ class MainWindow(QMainWindow):
 
             action_layout.addWidget(btn_edit)
             action_layout.addWidget(btn_del)
-            self.students_table.setCellWidget(row, 5, action_widget)
+            self.students_table.setCellWidget(row, 4, action_widget)
 
         self.students_table.resizeColumnToContents(1)
 
