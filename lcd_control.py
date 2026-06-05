@@ -141,6 +141,7 @@ class LcdUi:
         self.message = ""
         self.last_scan = 0
         self.last_touch = None
+        self.scanning_wifi = False
         self.running = True
         self.font_big = self.load_font(32, True)
         self.font_mid = self.load_font(23, True)
@@ -211,26 +212,32 @@ class LcdUi:
         return "Disconnected"
 
     def scan_wifi(self):
+        if self.scanning_wifi:
+            return
+        self.scanning_wifi = True
         self.message = "Scanning WiFi..."
         self.last_scan = time.time()
         self.render(force=True)
-        run(["nmcli", "dev", "wifi", "rescan"], timeout=8)
-        out = run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"], timeout=8)
-        nets = []
-        seen = set()
-        for line in out.splitlines():
-            parts = line.split(":")
-            if not parts or not parts[0]:
-                continue
-            ssid = parts[0].replace("\\:", ":").strip()
-            if ssid in seen:
-                continue
-            seen.add(ssid)
-            signal = parts[1] if len(parts) > 1 else ""
-            security = parts[2] if len(parts) > 2 else ""
-            nets.append({"ssid": ssid, "signal": signal, "security": security})
-        self.networks = nets[:8]
-        self.message = ""
+        try:
+            run(["nmcli", "dev", "wifi", "rescan"], timeout=8)
+            out = run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"], timeout=8)
+            nets = []
+            seen = set()
+            for line in out.splitlines():
+                parts = line.split(":")
+                if not parts or not parts[0]:
+                    continue
+                ssid = parts[0].replace("\\:", ":").strip()
+                if ssid in seen:
+                    continue
+                seen.add(ssid)
+                signal = parts[1] if len(parts) > 1 else ""
+                security = parts[2] if len(parts) > 2 else ""
+                nets.append({"ssid": ssid, "signal": signal, "security": security})
+            self.networks = nets[:8]
+            self.message = ""
+        finally:
+            self.scanning_wifi = False
 
     def launch_app(self):
         if self.app_running():
@@ -326,9 +333,9 @@ class LcdUi:
         d.text((24, 105), line[:36], fill=(235, 245, 250), font=self.font)
         d.text((24, 126), f"WiFi: {self.wifi_name()[:20]}   IP: {self.ip_addr()}", fill=(255, 214, 0), font=self.font_small)
 
-        self.button(d, (14, 160, 466, 232), action_label, action, fill=action_fill)
-        self.button(d, (14, 244, 226, 304), "WIFI", "wifi", fill=(25, 52, 82))
-        self.button(d, (254, 244, 466, 304), "REFRESH", "refresh")
+        self.button(d, (14, 154, 466, 220), action_label, action, fill=action_fill)
+        self.button(d, (14, 252, 226, 312), "WIFI", "wifi", fill=(25, 52, 82))
+        self.button(d, (254, 252, 466, 312), "REFRESH", "refresh")
         if self.message:
             d.text((18, 306), self.message[:44], fill=(255, 214, 0), font=self.font_small)
 
@@ -336,7 +343,7 @@ class LcdUi:
         self.header(d, "WiFi Networks")
         self.button(d, (365, 62, 468, 98), "BACK", "home")
         self.button(d, (250, 62, 354, 98), "SCAN", "scan")
-        if not self.networks or time.time() - self.last_scan > 60:
+        if (not self.networks or time.time() - self.last_scan > 60) and not self.scanning_wifi:
             self.scan_wifi()
         y = 106
         for i, net in enumerate(self.networks[:6]):
@@ -427,11 +434,24 @@ class LcdUi:
 
     def click(self, x, y):
         self.last_touch = (x, y)
+        print(f"touch mapped={x},{y} raw={self.touch.raw_x},{self.touch.raw_y}", flush=True)
         for rect, action in list(self.buttons):
             x1, y1, x2, y2 = rect
-            if x1 <= x <= x2 and y1 <= y <= y2:
+            pad = 24
+            if x1 - pad <= x <= x2 + pad and y1 - pad <= y <= y2 + pad:
                 self.handle(action)
                 return
+        nearest = None
+        for rect, action in list(self.buttons):
+            x1, y1, x2, y2 = rect
+            cx = (x1 + x2) / 2
+            cy = (y1 + y2) / 2
+            dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+            if nearest is None or dist < nearest[0]:
+                nearest = (dist, action)
+        if nearest and nearest[0] <= 62:
+            self.handle(nearest[1])
+            return
         self.message = f"Touch {x},{y}"
         self.render(force=True)
 
