@@ -5,6 +5,7 @@ import json
 import numpy as np
 import subprocess
 import platform
+import traceback
 from datetime import datetime, date, time, timedelta
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -43,6 +44,7 @@ except Exception:
 APP_VERSION = "1.0.0"
 LCD_COMMAND_PATH = Path("/tmp/classroom_app_command.json")
 LCD_STATE_PATH = Path("/tmp/classroom_app_state.json")
+CAMERA_OFF_TEXT = "Camera đang tắt\nBấm Bật camera để xem hình trực tiếp"
 
 DARK = {
     "bg":          "#0F1923",
@@ -85,8 +87,9 @@ QPushButton {{
     color: {DARK['text']};
     border: 1px solid {DARK['border']};
     border-radius: 8px;
-    padding: 8px 16px;
+    padding: 10px 16px;
     font-weight: 500;
+    min-height: 20px;
 }}
 QPushButton:hover {{
     background-color: {DARK['surface3']};
@@ -118,6 +121,7 @@ QPushButton#success {{
     background-color: #0A3020;
     color: {DARK['green']};
     border: 1px solid {DARK['green']};
+    font-weight: 800;
 }}
 QPushButton#success:hover {{
     background-color: {DARK['green']};
@@ -337,7 +341,7 @@ class CameraThread(QThread):
                 picam.start()
                 return "picamera2", picam
             except Exception as exc:
-                print(f"Picamera2 loi: {exc}. Dang thu USB camera...")
+                print(f"Lỗi Picamera2: {exc}. Đang thử USB camera...")
 
         backend = cv2.CAP_V4L2 if platform.system() == "Linux" else cv2.CAP_DSHOW
         cap = cv2.VideoCapture(0, backend)
@@ -372,7 +376,7 @@ class CameraThread(QThread):
         camera_type, camera = self._open_camera()
 
         if camera is None:
-            self.status_update.emit("Khong the mo camera")
+            self.status_update.emit("Không thể mở camera")
             self.running = False
             return
 
@@ -429,14 +433,14 @@ class CameraThread(QThread):
                 self.msleep(10)
         except Exception as exc:
             self.status_update.emit(f"Camera loi: {exc}")
-
-        self._close_camera(camera_type, camera)
+        finally:
+            self.running = False
+            self._close_camera(camera_type, camera)
 
     def stop(self):
         self.running = False
-        if not self.wait(2500):
-            self.terminate()
-            self.wait(500)
+        if not self.wait(4000):
+            print("Camera thread chưa đóng kịp, bỏ qua terminate để tránh sập ứng dụng.")
 
 
 # ─── Dialogs ──────────────────────────────────────────────────────────────────
@@ -453,8 +457,8 @@ class AddStudentDialog(QDialog):
         self.latest_frame = None
         self.preview_frozen = False
         self.camera_thread = None
-        self.setWindowTitle("Thêm Sinh Viên" if not student_data else "Chỉnh Sửa Sinh Viên")
-        self.setMinimumSize(620, 500)
+        self.setWindowTitle("Thêm sinh viên" if not student_data else "Sửa sinh viên")
+        self.setMinimumSize(760, 430)
         self.setStyleSheet(STYLESHEET + f"QDialog {{ background-color: {DARK['bg']}; }}")
         self._setup_ui()
         if student_data:
@@ -467,13 +471,13 @@ class AddStudentDialog(QDialog):
 
         # Left: Camera
         left = QVBoxLayout()
-        cam_label = QLabel("Anh khuon mat")
+        cam_label = QLabel("Ảnh khuôn mặt")
         cam_label.setStyleSheet(f"color: {DARK['accent']}; font-size: 14px; font-weight: 700;")
         left.addWidget(cam_label)
 
         self.camera_view = QLabel()
-        self.camera_view.setMinimumSize(220, 165)
-        self.camera_view.setMaximumSize(280, 210)
+        self.camera_view.setMinimumSize(260, 185)
+        self.camera_view.setMaximumSize(340, 240)
         self.camera_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.camera_view.setStyleSheet(f"""
             background-color: {DARK['surface']};
@@ -481,13 +485,13 @@ class AddStudentDialog(QDialog):
             border-radius: 10px;
         """)
         self.camera_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.camera_view.setText("Chua co anh")
+        self.camera_view.setText("Chưa có ảnh")
         left.addWidget(self.camera_view)
 
         pose_row = QHBoxLayout()
         pose_row.setSpacing(6)
         self.pose_buttons = {}
-        for pose, label in (("front", "Chinh dien"), ("left", "Trai"), ("right", "Phai")):
+        for pose, label in (("front", "Chính diện"), ("left", "Trái"), ("right", "Phải")):
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setMinimumHeight(38)
@@ -496,33 +500,33 @@ class AddStudentDialog(QDialog):
             self.pose_buttons[pose] = btn
         left.addLayout(pose_row)
 
-        btn_cam = QPushButton("Bat Camera")
+        btn_cam = QPushButton("Bật camera")
         btn_cam.setObjectName("primary")
         btn_cam.clicked.connect(self._toggle_camera)
         self.btn_cam = btn_cam
         left.addWidget(btn_cam)
 
-        btn_capture = QPushButton("Chup Anh")
+        btn_capture = QPushButton("Chụp ảnh")
         btn_capture.clicked.connect(self._capture)
         self.btn_capture = btn_capture
         btn_capture.setEnabled(False)
         left.addWidget(btn_capture)
-        self._set_pose("front", refresh_only=True)
 
-        btn_upload = QPushButton("Tai Anh Len")
+        btn_upload = QPushButton("Tải ảnh lên")
         btn_upload.clicked.connect(self._upload_photo)
         left.addWidget(btn_upload)
 
-        self.face_status = QLabel("Can chup 3 goc: chinh dien, trai, phai")
+        self.face_status = QLabel("Cần chụp 3 góc: chính diện, trái, phải")
         self.face_status.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px;")
         self.face_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         left.addWidget(self.face_status)
+        self._set_pose("front", refresh_only=True)
         left.addStretch()
         layout.addLayout(left)
 
         # Right: Form
         right = QVBoxLayout()
-        form_title = QLabel("Thong Tin Sinh Vien")
+        form_title = QLabel("Thông tin sinh viên")
         form_title.setStyleSheet(f"color: {DARK['accent']}; font-size: 14px; font-weight: 700;")
         right.addWidget(form_title)
 
@@ -532,17 +536,17 @@ class AddStudentDialog(QDialog):
 
         self.id_edit = QLineEdit()
         self.id_edit.setPlaceholderText("Ví dụ: SV001, 21IT001...")
-        form.addRow("Ma Sinh Vien *", self.id_edit)
+        form.addRow("Mã sinh viên *", self.id_edit)
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Họ và tên đầy đủ")
-        form.addRow("Ho va Ten *", self.name_edit)
+        form.addRow("Họ và tên *", self.name_edit)
 
         right.addLayout(form)
         right.addSpacing(20)
 
         # Note
-        note = QLabel("Yeu cau anh:\n- 1 anh chinh dien\n- 1 anh nghieng trai\n- 1 anh nghieng phai\n- Du sang, khong deo khau trang")
+        note = QLabel("Yêu cầu ảnh:\n- 1 ảnh chính diện\n- 1 ảnh nghiêng trái\n- 1 ảnh nghiêng phải\n- Đủ sáng, không đeo khẩu trang")
         note.setStyleSheet(f"""
             background-color: {DARK['surface2']};
             border: 1px solid {DARK['border']};
@@ -556,9 +560,9 @@ class AddStudentDialog(QDialog):
 
         # Buttons
         btn_layout = QHBoxLayout()
-        btn_cancel = QPushButton("Huy")
+        btn_cancel = QPushButton("Hủy")
         btn_cancel.clicked.connect(self.reject)
-        btn_save = QPushButton("Luu Sinh Vien")
+        btn_save = QPushButton("Lưu sinh viên")
         btn_save.setObjectName("primary")
         btn_save.clicked.connect(self._save)
         btn_layout.addWidget(btn_cancel)
@@ -579,7 +583,7 @@ class AddStudentDialog(QDialog):
     def _set_pose(self, pose, refresh_only=False):
         self.current_pose = pose
         self.preview_frozen = False
-        self.btn_capture.setText("Chup Anh")
+        self.btn_capture.setText("Chụp ảnh")
         if self.current_pose in self.pose_frames:
             self.captured_frame = self.pose_frames[self.current_pose]
             self._show_cv_frame(self.captured_frame)
@@ -592,38 +596,44 @@ class AddStudentDialog(QDialog):
         self._update_pose_status()
 
     def _update_pose_status(self):
-        labels = {"front": "chinh dien", "left": "trai", "right": "phai"}
-        short = {"front": "Chinh dien", "left": "Trai", "right": "Phai"}
+        labels = {"front": "chính diện", "left": "trái", "right": "phải"}
+        short = {"front": "Chính diện", "left": "Trái", "right": "Phải"}
         for pose, btn in self.pose_buttons.items():
-            mark = "OK" if pose in self.pose_frames else "--"
+            mark = "Đã chụp" if pose in self.pose_frames else "Chưa"
             selected = " *" if pose == self.current_pose else ""
             btn.setText(f"{short[pose]} {mark}{selected}")
         done = [labels[k] for k in ("front", "left", "right") if k in self.pose_frames]
         missing = [labels[k] for k in ("front", "left", "right") if k not in self.pose_frames]
         if missing:
-            self.face_status.setText(f"Da co: {', '.join(done) if done else 'chua co'} | Thieu: {', '.join(missing)}")
+            self.face_status.setText(f"Đã có: {', '.join(done) if done else 'chưa có'} | Thiếu: {', '.join(missing)}")
             self.face_status.setStyleSheet(f"color: {DARK['yellow']}; font-size: 11px;")
         else:
-            self.face_status.setText("Da du 3 anh khuon mat")
+            self.face_status.setText("Đã đủ 3 ảnh khuôn mặt")
             self.face_status.setStyleSheet(f"color: {DARK['green']}; font-size: 11px;")
 
     def _toggle_camera(self):
         if self.camera_thread and self.camera_thread.running:
             self.camera_thread.stop()
             self.camera_thread = None
-            self.btn_cam.setText("Bat Camera")
+            self.btn_cam.setText("Bật camera")
             self.btn_capture.setEnabled(False)
             self.preview_frozen = False
-            self.btn_capture.setText("Chup Anh")
+            self.latest_frame = None
+            self.btn_capture.setText("Chụp ảnh")
+            if self.current_pose not in self.pose_frames:
+                self.camera_view.clear()
+                self.camera_view.setText("Camera đang tắt")
         else:
             self.camera_thread = CameraThread(mode="capture")
             self.camera_thread.frame_ready.connect(self._update_preview)
             self.camera_thread.status_update.connect(self._on_capture_camera_status)
             self.camera_thread.start()
-            self.btn_cam.setText("Tat Camera")
+            self.btn_cam.setText("Tắt camera")
             self.btn_capture.setEnabled(True)
 
     def _update_preview(self, frame):
+        if self.sender() is not self.camera_thread:
+            return
         if self.preview_frozen:
             return
         self.latest_frame = frame.copy()
@@ -642,8 +652,8 @@ class AddStudentDialog(QDialog):
     def _capture(self):
         if self.preview_frozen:
             self.preview_frozen = False
-            self.btn_capture.setText("Chup Anh")
-            self.face_status.setText("Dang xem camera")
+            self.btn_capture.setText("Chụp ảnh")
+            self.face_status.setText("Đang xem camera")
             self.face_status.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px;")
             return
 
@@ -659,7 +669,7 @@ class AddStudentDialog(QDialog):
         self.captured_frame = frame
         self.pose_frames[self.current_pose] = frame
         self.preview_frozen = True
-        self.btn_capture.setText("Chup Lai")
+        self.btn_capture.setText("Chụp lại")
         self._show_cv_frame(frame)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = fm.detect_faces(gray)
@@ -667,7 +677,7 @@ class AddStudentDialog(QDialog):
             self._update_pose_status()
         else:
             self.pose_frames.pop(self.current_pose, None)
-            self.face_status.setText("Khong phat hien khuon mat")
+            self.face_status.setText("Không phát hiện khuôn mặt")
             self.face_status.setStyleSheet(f"color: {DARK['yellow']}; font-size: 11px;")
 
     def _upload_photo(self):
@@ -687,13 +697,13 @@ class AddStudentDialog(QDialog):
                     self._update_pose_status()
                 else:
                     self.pose_frames.pop(self.current_pose, None)
-                    self.face_status.setText("Khong phat hien khuon mat")
+                    self.face_status.setText("Không phát hiện khuôn mặt")
                     self.face_status.setStyleSheet(f"color: {DARK['yellow']}; font-size: 11px;")
 
     def _on_capture_camera_status(self, msg):
         self.face_status.setText(msg)
         self.face_status.setStyleSheet(f"color: {DARK['red']}; font-size: 11px;")
-        self.btn_cam.setText("Bat Camera")
+        self.btn_cam.setText("Bật camera")
         self.btn_capture.setEnabled(False)
         self.camera_thread = None
 
@@ -731,7 +741,7 @@ class AddStudentDialog(QDialog):
         if encodings:
             face_encoding = np.mean(np.array(encodings, dtype=np.float32), axis=0).tolist()
         elif not self.student_data:
-            QMessageBox.warning(self, "Loi anh", "Khong trich xuat duoc khuon mat tu anh.")
+            QMessageBox.warning(self, "Lỗi ảnh", "Không trích xuất được khuôn mặt từ ảnh.")
             return
 
         if self.student_data:
@@ -771,7 +781,7 @@ class AddStudentDialog(QDialog):
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Cai Dat He Thong")
+        self.setWindowTitle("Cài đặt hệ thống")
         self.setMinimumSize(640, 520)
         self.setStyleSheet(STYLESHEET + f"QDialog {{ background-color: {DARK['bg']}; }}")
         self._setup_ui()
@@ -782,7 +792,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(10)
 
-        title = QLabel("Cai Dat He Thong")
+        title = QLabel("Cài đặt hệ thống")
         title.setObjectName("title")
         layout.addWidget(title)
 
@@ -941,14 +951,14 @@ class SettingsDialog(QDialog):
             font-size: 12px;
         """)
         af.addRow(note)
-        tabs.addTab(att_widget, "Diem Danh")
+        tabs.addTab(att_widget, "Điểm danh")
 
         layout.addWidget(tabs)
 
         btn_layout = QHBoxLayout()
         btn_cancel = QPushButton("Hủy")
         btn_cancel.clicked.connect(self.reject)
-        btn_save = QPushButton("Luu Cai Dat")
+        btn_save = QPushButton("Lưu cài đặt")
         btn_save.setObjectName("primary")
         btn_save.clicked.connect(self._save)
         btn_layout.addStretch()
@@ -1022,7 +1032,7 @@ class MainWindow(QMainWindow):
         db.init_db()
         fm.load_recognizer()
 
-        self.setWindowTitle(f"He Thong Kiem Soat Lop Hoc v{APP_VERSION}")
+        self.setWindowTitle(f"Hệ thống điểm danh khuôn mặt v{APP_VERSION}")
         self.setMinimumSize(860, 540)
         screen = QApplication.primaryScreen()
         if screen:
@@ -1076,9 +1086,9 @@ class MainWindow(QMainWindow):
         logo_frame.setStyleSheet(f"background-color: {DARK['surface2']}; border-bottom: 1px solid {DARK['border']};")
         logo_layout = QVBoxLayout(logo_frame)
         logo_layout.setContentsMargins(16, 12, 16, 12)
-        logo_title = QLabel("ClassRoom AI")
+        logo_title = QLabel("Điểm danh AI")
         logo_title.setStyleSheet(f"font-size: 16px; font-weight: 800; color: {DARK['accent']};")
-        logo_sub = QLabel("Smart Attendance System")
+        logo_sub = QLabel("Nhận diện khuôn mặt")
         logo_sub.setStyleSheet(f"font-size: 10px; color: {DARK['text_dim']};")
         logo_layout.addWidget(logo_title)
         logo_layout.addWidget(logo_sub)
@@ -1086,17 +1096,17 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addSpacing(8)
 
-        nav_label = QLabel("  DIEU HUONG")
+        nav_label = QLabel("  ĐIỀU HƯỚNG")
         nav_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 10px; letter-spacing: 2px; padding: 4px 16px;")
         sidebar_layout.addWidget(nav_label)
 
         self.nav_buttons = []
         nav_items = [
-            ("Dashboard", 0),
-            ("Camera va Diem Danh", 1),
-            ("Quan Ly Sinh Vien", 2),
-            ("Bao Cao", 3),
-            ("Cai Dat", 4),
+            ("Tổng quan", 0),
+            ("Camera & điểm danh", 1),
+            ("Sinh viên", 2),
+            ("Báo cáo", 3),
+            ("Cài đặt", 4),
         ]
 
         for label, idx in nav_items:
@@ -1145,7 +1155,7 @@ class MainWindow(QMainWindow):
 
         # Header
         hdr = QHBoxLayout()
-        title = QLabel("Dashboard")
+        title = QLabel("Tổng quan")
         title.setObjectName("title")
         hdr.addWidget(title)
         hdr.addStretch()
@@ -1161,10 +1171,10 @@ class MainWindow(QMainWindow):
 
         self.stat_cards = {}
         stats_data = [
-            ("total_students", "Tong Sinh Vien", "0", DARK['accent']),
-            ("present_today", "Co Mat Hom Nay", "0", DARK['green']),
-            ("absent_today", "Vang Hom Nay", "0", DARK['red']),
-            ("sessions_today", "Tiet Hoc Hom Nay", "0", DARK['yellow']),
+            ("total_students", "Tổng sinh viên", "0", DARK['accent']),
+            ("present_today", "Có mặt hôm nay", "0", DARK['green']),
+            ("absent_today", "Vắng hôm nay", "0", DARK['red']),
+            ("sessions_today", "Tiết học hôm nay", "0", DARK['yellow']),
         ]
 
         for key, label, val, color in stats_data:
@@ -1199,7 +1209,7 @@ class MainWindow(QMainWindow):
         recent_card.setObjectName("card")
         recent_layout = QVBoxLayout(recent_card)
         recent_layout.setContentsMargins(16, 16, 16, 16)
-        recent_title = QLabel("Diem Danh Gan Day")
+        recent_title = QLabel("Điểm danh gần đây")
         recent_title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {DARK['accent']};")
         recent_layout.addWidget(recent_title)
 
@@ -1218,7 +1228,7 @@ class MainWindow(QMainWindow):
         session_card.setFixedWidth(280)
         session_layout = QVBoxLayout(session_card)
         session_layout.setContentsMargins(16, 16, 16, 16)
-        session_title = QLabel("Tiet Hoc Hien Tai")
+        session_title = QLabel("Tiết học hiện tại")
         session_title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {DARK['accent']};")
         session_layout.addWidget(session_title)
 
@@ -1266,12 +1276,12 @@ class MainWindow(QMainWindow):
 
         # Header
         hdr = QHBoxLayout()
-        title = QLabel("Camera va Diem Danh")
+        title = QLabel("Camera và điểm danh")
         title.setObjectName("title")
         hdr.addWidget(title)
         hdr.addStretch()
 
-        self.btn_settings_cam = QPushButton("Cài Đặt")
+        self.btn_settings_cam = QPushButton("Cài đặt")
         self.btn_settings_cam.setMinimumHeight(36)
         self.btn_settings_cam.clicked.connect(self._open_settings)
         hdr.addWidget(self.btn_settings_cam)
@@ -1285,19 +1295,19 @@ class MainWindow(QMainWindow):
         sb_layout = QHBoxLayout(session_bar)
         sb_layout.setContentsMargins(16, 8, 16, 8)
 
-        sb_layout.addWidget(QLabel("Ngay:"))
+        sb_layout.addWidget(QLabel("Ngày:"))
         self.date_combo = QComboBox()
         today = date.today().isoformat()
         self.date_combo.addItem(f"Hôm nay ({today})", today)
         sb_layout.addWidget(self.date_combo)
 
-        sb_layout.addWidget(QLabel("   Tiet:"))
+        sb_layout.addWidget(QLabel("   Tiết:"))
         self.period_combo = QComboBox()
         for i in range(1, 4):
             self.period_combo.addItem(f"Tiết {i}", i)
         sb_layout.addWidget(self.period_combo)
 
-        self.btn_start_session = QPushButton("Bat Dau")
+        self.btn_start_session = QPushButton("Bắt đầu")
         self.btn_start_session.setObjectName("success")
         self.btn_start_session.clicked.connect(self._toggle_session)
         sb_layout.addWidget(self.btn_start_session)
@@ -1325,10 +1335,10 @@ class MainWindow(QMainWindow):
         cam_title_row.addWidget(cam_title)
         cam_title_row.addStretch()
 
-        self.cam_status_badge = QLabel("OFFLINE")
+        self.cam_status_badge = QLabel("ĐÃ TẮT")
         self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
         cam_title_row.addWidget(self.cam_status_badge)
-        self.btn_toggle_camera = QPushButton("Bat Camera")
+        self.btn_toggle_camera = QPushButton("Bật camera")
         self.btn_toggle_camera.setObjectName("primary")
         self.btn_toggle_camera.setMinimumSize(150, 40)
         self.btn_toggle_camera.clicked.connect(self._toggle_camera_preview)
@@ -1344,15 +1354,15 @@ class MainWindow(QMainWindow):
             border-radius: 8px;
         """)
         self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.camera_label.setText("Camera chua duoc bat\nCo the bat bat cu luc nao de xem truoc")
+        self.camera_label.setText(CAMERA_OFF_TEXT)
         cam_layout.addWidget(self.camera_label)
 
         # Scan log
-        self.scan_log_label = QLabel("Nhat ky quet: -")
+        self.scan_log_label = QLabel("Nhật ký quét: -")
         self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
         cam_layout.addWidget(self.scan_log_label)
 
-        content.addWidget(cam_card)
+        content.addWidget(cam_card, 3)
 
         # Attendance list panel
         att_panel = QFrame()
@@ -1362,7 +1372,7 @@ class MainWindow(QMainWindow):
         att_layout = QVBoxLayout(att_panel)
         att_layout.setContentsMargins(12, 12, 12, 12)
 
-        att_title = QLabel("Bang Diem Danh")
+        att_title = QLabel("Bảng điểm danh")
         att_title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {DARK['accent']};")
         att_layout.addWidget(att_title)
 
@@ -1387,11 +1397,11 @@ class MainWindow(QMainWindow):
         self.att_table.verticalHeader().setVisible(False)
         att_layout.addWidget(self.att_table)
 
-        btn_refresh_att = QPushButton("Làm Mới")
+        btn_refresh_att = QPushButton("Làm mới")
         btn_refresh_att.clicked.connect(self._refresh_attendance_table)
         att_layout.addWidget(btn_refresh_att)
 
-        content.addWidget(att_panel)
+        content.addWidget(att_panel, 2)
         layout.addLayout(content)
 
         return page
@@ -1430,14 +1440,16 @@ class MainWindow(QMainWindow):
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Tìm kiếm sinh viên...")
-        self.search_edit.setMaximumWidth(240)
+        self.search_edit.setMaximumWidth(190)
+        self.search_edit.setMinimumHeight(42)
         self.search_edit.textChanged.connect(self._filter_students)
         hdr.addWidget(self.search_edit)
 
         btn_add = QPushButton("Thêm Sinh Viên")
         btn_add.setObjectName("primary")
-        btn_add.setMinimumSize(170, 38)
+        btn_add.setMinimumSize(220, 46)
         btn_add.clicked.connect(self._add_student)
+        self.btn_add_student = btn_add
         hdr.addWidget(btn_add)
         layout.addLayout(hdr)
 
@@ -1696,7 +1708,7 @@ class MainWindow(QMainWindow):
             period = self.period_combo.currentData() if hasattr(self, "period_combo") else None
             status = "San sang"
             if self.session_active and self.current_session_id:
-                status = "Dang diem danh"
+                status = "Đang điểm danh"
                 for item in db.get_attendance_by_session(self.current_session_id):
                     if item["status"] == "present":
                         present += 1
@@ -1711,7 +1723,7 @@ class MainWindow(QMainWindow):
                     status = f"Cho tiet {state['period']}"
                     period = state["period"]
                 elif state["type"] == "break":
-                    status = "Dang ra choi"
+                    status = "Đang ra chơi"
                 else:
                     status = "Ngoai gio hoc"
             last_seen = self._last_displayed_name
@@ -1829,7 +1841,7 @@ class MainWindow(QMainWindow):
             att = db.get_attendance_by_session(self.current_session_id)
             total = len(students)
             p = sum(1 for a in att if a["status"] == "present")
-            self.session_status_lbl.setText(f"Tiet dang chay - {p}/{total} sinh vien co mat")
+            self.session_status_lbl.setText(f"Tiết đang chạy - {p}/{total} sinh viên có mặt")
             self.attendance_summary_lbl.setText(
                 f"Có mặt: {p}  |  Vắng: {total - p}"
             )
@@ -1837,6 +1849,30 @@ class MainWindow(QMainWindow):
                 self.progress_bar.setValue(int(p / total * 100))
 
     # ── Camera & Session ───────────────────────────────────────────────────────
+
+    def _set_camera_button_state(self, running):
+        self.btn_toggle_camera.setVisible(True)
+        self.btn_toggle_camera.setEnabled(True)
+        self.btn_toggle_camera.setMinimumSize(150, 40)
+        if running:
+            self.btn_toggle_camera.setText("Tắt camera")
+            self.btn_toggle_camera.setObjectName("danger")
+        else:
+            self.btn_toggle_camera.setText("Bật camera")
+            self.btn_toggle_camera.setObjectName("primary")
+        self.btn_toggle_camera.setStyle(self.btn_toggle_camera.style())
+        self.btn_toggle_camera.show()
+        self.btn_toggle_camera.update()
+
+    def _show_camera_idle(self, message=CAMERA_OFF_TEXT):
+        self.cam_status_badge.setText("ĐÃ TẮT")
+        self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
+        self._set_camera_button_state(False)
+        self.camera_label.clear()
+        self.camera_label.setPixmap(QPixmap())
+        self.camera_label.setText(message)
+        self.scan_log_label.setText("Nhật ký quét: -")
+        self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
 
     def _start_camera_preview(self):
         if self.camera_thread and self.camera_thread.running:
@@ -1848,18 +1884,12 @@ class MainWindow(QMainWindow):
         self.camera_thread.face_detected.connect(self._on_face_detected)
         self.camera_thread.status_update.connect(self._on_cam_status)
         self.camera_thread.start()
-        self.cam_status_badge.setText("DANG MO")
+        self.cam_status_badge.setText("ĐANG MỞ")
         self.cam_status_badge.setStyleSheet(f"color: {DARK['yellow']}; font-size: 11px; font-weight: 700;")
-        self.btn_toggle_camera.setText("Tat Camera")
-        self.btn_toggle_camera.setObjectName("danger")
-        self.btn_toggle_camera.setStyle(self.btn_toggle_camera.style())
-        self.btn_toggle_camera.setMinimumSize(150, 40)
-        self.btn_toggle_camera.setVisible(True)
-        self.btn_toggle_camera.setEnabled(True)
-        self.btn_toggle_camera.show()
-        self.btn_toggle_camera.update()
-        self.camera_label.setText("Dang mo camera...")
-        self.scan_log_label.setText("Camera đang bật. Chỉ điểm danh khi bấm Bắt Đầu.")
+        self._set_camera_button_state(True)
+        self.camera_label.clear()
+        self.camera_label.setText("Đang mở camera...")
+        self.scan_log_label.setText("Camera đang bật. Chỉ điểm danh khi bấm Bắt đầu.")
         self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
         return True
 
@@ -1867,20 +1897,7 @@ class MainWindow(QMainWindow):
         if self.camera_thread:
             self.camera_thread.stop()
             self.camera_thread = None
-        self.cam_status_badge.setText("OFFLINE")
-        self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
-        self.btn_toggle_camera.setText("Bat Camera")
-        self.btn_toggle_camera.setObjectName("primary")
-        self.btn_toggle_camera.setStyle(self.btn_toggle_camera.style())
-        self.btn_toggle_camera.setMinimumSize(150, 40)
-        self.btn_toggle_camera.setVisible(True)
-        self.btn_toggle_camera.setEnabled(True)
-        self.btn_toggle_camera.show()
-        self.btn_toggle_camera.update()
-        self.camera_label.clear()
-        self.camera_label.setText("Camera chua duoc bat\nCo the bat bat cu luc nao de xem truoc")
-        self.scan_log_label.setText("Nhat ky quet: -")
-        self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
+        self._show_camera_idle()
 
     def _toggle_camera_preview(self):
         if self.camera_thread and self.camera_thread.running:
@@ -1903,16 +1920,16 @@ class MainWindow(QMainWindow):
         self.session_active = True
 
         settings = db.get_all_settings()
-        self.btn_start_session.setText("Ket Thuc")
+        self.btn_start_session.setText("Kết thúc")
         self.btn_start_session.setObjectName("danger")
         self.btn_start_session.setStyle(self.btn_start_session.style())
         if session:
             self.session_info_lbl.setText(
-                f"Dang diem danh - Tiet {period}  ({session['start_time']} -> {session['end_time']})"
+                f"Đang điểm danh - Tiết {period} ({session['start_time']} -> {session['end_time']})"
             )
             self.session_info_lbl.setStyleSheet(f"color: {DARK['green']}; font-size: 12px;")
         else:
-            self.session_info_lbl.setText("Camera dang chay ngoai gio tiet hoc - khong ghi diem danh")
+            self.session_info_lbl.setText("Camera đang chạy ngoài giờ tiết học - không ghi điểm danh")
             self.session_info_lbl.setStyleSheet(f"color: {DARK['yellow']}; font-size: 12px;")
 
         if self.camera_thread and self.camera_thread.running:
@@ -1930,7 +1947,7 @@ class MainWindow(QMainWindow):
             self.scan_log_label.setStyleSheet(f"color: {DARK['yellow']}; font-size: 11px; padding: 4px;")
 
         self._refresh_attendance_table()
-        self.statusBar().showMessage(f"Da bat dau - {datetime.now().strftime('%H:%M:%S')}")
+        self.statusBar().showMessage(f"Đã bắt đầu - {datetime.now().strftime('%H:%M:%S')}")
         self._update_lcd_status()
         self._write_lcd_control_state()
 
@@ -1956,7 +1973,7 @@ class MainWindow(QMainWindow):
             db.update_session_status(self.current_session_id, "completed")
 
         self.session_active = False
-        self.btn_start_session.setText("Bat Dau")
+        self.btn_start_session.setText("Bắt đầu")
         self.btn_start_session.setObjectName("success")
         self.btn_start_session.setStyle(self.btn_start_session.style())
         self.session_info_lbl.setText("Tiết học đã kết thúc")
@@ -1965,18 +1982,20 @@ class MainWindow(QMainWindow):
             self.scan_log_label.setText("Đã kết thúc. Camera vẫn đang bật để xem trước.")
             self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
         else:
-            self.camera_label.setText("Camera chua duoc bat\nCo the bat bat cu luc nao de xem truoc")
+            self._show_camera_idle()
         if hasattr(self, '_att_timer'):
             self._att_timer.stop()
         if self._absence_timer:
             self._absence_timer.stop()
         self._refresh_attendance_table()
         self._refresh_dashboard()
-        self.statusBar().showMessage(f"Tiet hoc ket thuc - {datetime.now().strftime('%H:%M:%S')}")
+        self.statusBar().showMessage(f"Tiết học kết thúc - {datetime.now().strftime('%H:%M:%S')}")
         self._update_lcd_status()
         self._write_lcd_control_state()
 
     def _update_camera_frame(self, frame):
+        if self.sender() is not self.camera_thread:
+            return
         self.cam_status_badge.setText("LIVE")
         self.cam_status_badge.setStyleSheet(f"color: {DARK['green']}; font-size: 11px; font-weight: 700;")
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -2001,14 +2020,14 @@ class MainWindow(QMainWindow):
         self._update_lcd_status()
 
     def _on_cam_status(self, msg):
+        if self.sender() is self.camera_thread:
+            self.camera_thread = None
+        self._show_camera_idle(f"{msg}\nKiểm tra quyền camera hoặc ứng dụng khác đang dùng camera.")
         self.scan_log_label.setText(msg)
         self.scan_log_label.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; padding: 4px;")
-        self.cam_status_badge.setText("LOI CAMERA")
-        self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
-        self.camera_label.setText(f"{msg}\nKiem tra quyen camera hoac dong app dang dung camera.")
         if self.session_active:
             self.session_active = False
-            self.btn_start_session.setText("Bat Dau")
+            self.btn_start_session.setText("Bắt đầu")
             self.btn_start_session.setObjectName("success")
             self.btn_start_session.setStyle(self.btn_start_session.style())
             self.session_info_lbl.setText("Camera không mở được")
@@ -2187,8 +2206,8 @@ class MainWindow(QMainWindow):
                 avatar_lbl.setPixmap(pix)
                 avatar_lbl.setStyleSheet(f"background-color: {DARK['surface2']}; border-radius: 4px;")
             else:
-                avatar_lbl.setText("👤")
-                avatar_lbl.setStyleSheet(f"font-size: 24px; background-color: {DARK['surface2']}; border-radius: 22px;")
+                avatar_lbl.setText("SV")
+                avatar_lbl.setStyleSheet(f"font-size: 14px; font-weight: 800; color: {DARK['accent']}; background-color: {DARK['surface2']}; border-radius: 22px;")
             self.students_table.setCellWidget(row, 0, avatar_lbl)
 
             id_item = QTableWidgetItem(student["student_id"])
@@ -2243,21 +2262,31 @@ class MainWindow(QMainWindow):
         was_camera_running = bool(self.camera_thread and self.camera_thread.running)
         if was_camera_running:
             self._stop_camera_preview()
-        dlg = AddStudentDialog(self)
-        dlg.student_added.connect(self._refresh_student_list)
-        dlg.exec()
-        if was_camera_running:
-            self._start_camera_preview()
+        try:
+            dlg = AddStudentDialog(self)
+            dlg.student_added.connect(self._refresh_student_list)
+            dlg.exec()
+        except Exception as exc:
+            traceback.print_exc()
+            QMessageBox.critical(self, "Lỗi thêm sinh viên", f"Không mở được màn thêm sinh viên:\n{exc}")
+        finally:
+            if was_camera_running:
+                self._start_camera_preview()
 
     def _edit_student(self, student_data):
         was_camera_running = bool(self.camera_thread and self.camera_thread.running)
         if was_camera_running:
             self._stop_camera_preview()
-        dlg = AddStudentDialog(self, student_data=student_data)
-        dlg.student_added.connect(self._refresh_student_list)
-        dlg.exec()
-        if was_camera_running:
-            self._start_camera_preview()
+        try:
+            dlg = AddStudentDialog(self, student_data=student_data)
+            dlg.student_added.connect(self._refresh_student_list)
+            dlg.exec()
+        except Exception as exc:
+            traceback.print_exc()
+            QMessageBox.critical(self, "Lỗi sửa sinh viên", f"Không mở được màn sửa sinh viên:\n{exc}")
+        finally:
+            if was_camera_running:
+                self._start_camera_preview()
 
     def _delete_student(self, student_id):
         reply = QMessageBox.question(
@@ -2316,7 +2345,7 @@ class MainWindow(QMainWindow):
                     status = att["status"] if att else "absent"
                 else:
                     status = "—"
-                status_vi = {"present": "Co mat", "absent": "Vang", "half": "1/2", "—": "-"}
+                status_vi = {"present": "Có mặt", "absent": "Vắng", "half": "1/2", "—": "-"}
                 item = QTableWidgetItem(status_vi.get(status, status))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.export_preview.setItem(row, p + 1, item)
@@ -2376,7 +2405,7 @@ class MainWindow(QMainWindow):
         s = db.get_all_settings()
         total = int(s.get("total_periods", 3))
         lines = [
-            "CAI DAT DANG DUNG",
+            "CÀI ĐẶT ĐANG DÙNG",
             "",
             f"Lop: {s.get('class_name', '')}",
             f"So tiet trong ngay: {total}",
@@ -2389,7 +2418,7 @@ class MainWindow(QMainWindow):
         for period in range(1, total + 1):
             start = s.get(f"period_{period}_start", "--:--")
             end = s.get(f"period_{period}_end", "--:--")
-            lines.append(f"Tiet {period}: {start} - {end}")
+            lines.append(f"Tiết {period}: {start} - {end}")
         if total >= 2:
             lines.append(f"Nghi giai lao: {s.get('break_start', '--:--')} - {s.get('break_end', '--:--')}")
         text = "\n".join(lines)
