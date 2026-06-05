@@ -1347,21 +1347,31 @@ class MainWindow(QMainWindow):
         cam_layout = QVBoxLayout(cam_card)
         cam_layout.setContentsMargins(12, 12, 12, 12)
 
-        cam_title_row = QHBoxLayout()
         cam_title = QLabel("Camera")
         cam_title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {DARK['accent']};")
-        cam_title_row.addWidget(cam_title)
-        cam_title_row.addStretch()
+        cam_layout.addWidget(cam_title)
 
-        self.cam_status_badge = QLabel("ĐÃ TẮT")
-        self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
-        cam_title_row.addWidget(self.cam_status_badge)
+        cam_control_row = QHBoxLayout()
+        cam_control_row.setSpacing(10)
         self.btn_toggle_camera = QPushButton("Bật camera")
         self.btn_toggle_camera.setObjectName("primary")
-        self.btn_toggle_camera.setMinimumSize(150, 40)
+        self.btn_toggle_camera.setMinimumSize(190, 46)
         self.btn_toggle_camera.clicked.connect(self._toggle_camera_preview)
-        cam_title_row.addWidget(self.btn_toggle_camera)
-        cam_layout.addLayout(cam_title_row)
+        cam_control_row.addWidget(self.btn_toggle_camera)
+        self.cam_status_badge = QLabel("ĐÃ TẮT")
+        self.cam_status_badge.setMinimumHeight(40)
+        self.cam_status_badge.setStyleSheet(f"""
+            color: {DARK['red']};
+            font-size: 12px;
+            font-weight: 800;
+            padding: 8px 12px;
+            background-color: {DARK['surface2']};
+            border: 1px solid {DARK['border']};
+            border-radius: 8px;
+        """)
+        cam_control_row.addWidget(self.cam_status_badge)
+        cam_control_row.addStretch()
+        cam_layout.addLayout(cam_control_row)
 
         self.camera_label = QLabel()
         self.camera_label.setMinimumSize(300, 220)
@@ -1455,21 +1465,25 @@ class MainWindow(QMainWindow):
         title.setObjectName("title")
         hdr.addWidget(title)
         hdr.addStretch()
+        layout.addLayout(hdr)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(10)
+        btn_add = QPushButton("Thêm sinh viên")
+        btn_add.setObjectName("primary")
+        btn_add.setMinimumSize(230, 50)
+        btn_add.clicked.connect(self._add_student)
+        self.btn_add_student = btn_add
+        toolbar.addWidget(btn_add)
+        toolbar.addStretch()
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Tìm kiếm sinh viên...")
-        self.search_edit.setMaximumWidth(190)
-        self.search_edit.setMinimumHeight(42)
+        self.search_edit.setMaximumWidth(260)
+        self.search_edit.setMinimumHeight(46)
         self.search_edit.textChanged.connect(self._filter_students)
-        hdr.addWidget(self.search_edit)
-
-        btn_add = QPushButton("Thêm sinh viên")
-        btn_add.setObjectName("primary")
-        btn_add.setMinimumSize(220, 46)
-        btn_add.clicked.connect(self._add_student)
-        self.btn_add_student = btn_add
-        hdr.addWidget(btn_add)
-        layout.addLayout(hdr)
+        toolbar.addWidget(self.search_edit)
+        layout.addLayout(toolbar)
 
         # Stats row
         stats_row = QHBoxLayout()
@@ -1536,19 +1550,22 @@ class MainWindow(QMainWindow):
         self.export_date = QComboBox()
         self._populate_date_combo()
         day_form.addWidget(self.export_date)
-        day_form.addWidget(QLabel("Định dạng:"))
-        self.export_format = QComboBox()
-        self.export_format.addItem("Excel (.xlsx)", "xlsx")
-        self.export_format.addItem("PDF (.pdf)", "pdf")
-        day_form.addWidget(self.export_format)
         day_form.addStretch()
         dl.addLayout(day_form)
 
-        btn_export_day = QPushButton("Xuất Báo Cáo Theo Ngày")
-        btn_export_day.setObjectName("primary")
-        btn_export_day.setMinimumSize(230, 38)
-        btn_export_day.clicked.connect(self._export_by_date)
-        dl.addWidget(btn_export_day)
+        day_buttons = QHBoxLayout()
+        btn_export_day_xlsx = QPushButton("Xuất Excel theo ngày")
+        btn_export_day_xlsx.setObjectName("primary")
+        btn_export_day_xlsx.setMinimumSize(220, 44)
+        btn_export_day_xlsx.clicked.connect(lambda: self._export_by_date_as("xlsx"))
+        day_buttons.addWidget(btn_export_day_xlsx)
+        btn_export_day_pdf = QPushButton("Xuất PDF theo ngày")
+        btn_export_day_pdf.setObjectName("success")
+        btn_export_day_pdf.setMinimumSize(220, 44)
+        btn_export_day_pdf.clicked.connect(lambda: self._export_by_date_as("pdf"))
+        day_buttons.addWidget(btn_export_day_pdf)
+        day_buttons.addStretch()
+        dl.addLayout(day_buttons)
 
         self.export_preview = QTableWidget(0, 5)
         self.export_preview.setHorizontalHeaderLabels(["Mã SV", "Họ Tên", "Tiết 1", "Tiết 2", "Tiết 3"])
@@ -1582,19 +1599,22 @@ class MainWindow(QMainWindow):
         self.year_spin.setRange(2020, 2030)
         self.year_spin.setValue(datetime.now().year)
         month_form.addWidget(self.year_spin)
-        month_form.addWidget(QLabel("Định dạng:"))
-        self.month_export_format = QComboBox()
-        self.month_export_format.addItem("Excel (.xlsx)", "xlsx")
-        self.month_export_format.addItem("PDF (.pdf)", "pdf")
-        month_form.addWidget(self.month_export_format)
         month_form.addStretch()
         ml.addLayout(month_form)
 
-        btn_export_month = QPushButton("Xuất Báo Cáo Tháng")
-        btn_export_month.setObjectName("primary")
-        btn_export_month.setMinimumSize(220, 38)
-        btn_export_month.clicked.connect(self._export_monthly)
-        ml.addWidget(btn_export_month)
+        month_buttons = QHBoxLayout()
+        btn_export_month_xlsx = QPushButton("Xuất Excel tháng")
+        btn_export_month_xlsx.setObjectName("primary")
+        btn_export_month_xlsx.setMinimumSize(210, 44)
+        btn_export_month_xlsx.clicked.connect(lambda: self._export_monthly_as("xlsx"))
+        month_buttons.addWidget(btn_export_month_xlsx)
+        btn_export_month_pdf = QPushButton("Xuất PDF tháng")
+        btn_export_month_pdf.setObjectName("success")
+        btn_export_month_pdf.setMinimumSize(210, 44)
+        btn_export_month_pdf.clicked.connect(lambda: self._export_monthly_as("pdf"))
+        month_buttons.addWidget(btn_export_month_pdf)
+        month_buttons.addStretch()
+        ml.addLayout(month_buttons)
         ml.addStretch()
 
         tabs.addTab(month_tab, "Báo Cáo Tháng")
@@ -1871,7 +1891,7 @@ class MainWindow(QMainWindow):
     def _set_camera_button_state(self, running):
         self.btn_toggle_camera.setVisible(True)
         self.btn_toggle_camera.setEnabled(True)
-        self.btn_toggle_camera.setMinimumSize(150, 40)
+        self.btn_toggle_camera.setMinimumSize(190, 46)
         if running:
             self.btn_toggle_camera.setText("Tắt camera")
             self.btn_toggle_camera.setObjectName("danger")
@@ -1882,6 +1902,17 @@ class MainWindow(QMainWindow):
         self.btn_toggle_camera.show()
         self.btn_toggle_camera.update()
 
+    def _disconnect_camera_thread(self, thread):
+        for signal, slot in (
+            (thread.frame_ready, self._update_camera_frame),
+            (thread.face_detected, self._on_face_detected),
+            (thread.status_update, self._on_cam_status),
+        ):
+            try:
+                signal.disconnect(slot)
+            except Exception:
+                pass
+
     def _show_camera_idle(self, message=CAMERA_OFF_TEXT):
         self.cam_status_badge.setText("ĐÃ TẮT")
         self.cam_status_badge.setStyleSheet(f"color: {DARK['red']}; font-size: 11px; font-weight: 700;")
@@ -1889,6 +1920,7 @@ class MainWindow(QMainWindow):
         self.camera_label.clear()
         self.camera_label.setPixmap(QPixmap())
         self.camera_label.setText(message)
+        self.camera_label.repaint()
         self.scan_log_label.setText("Nhật ký quét: -")
         self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
 
@@ -1913,8 +1945,10 @@ class MainWindow(QMainWindow):
 
     def _stop_camera_preview(self):
         if self.camera_thread:
-            self.camera_thread.stop()
+            thread = self.camera_thread
             self.camera_thread = None
+            self._disconnect_camera_thread(thread)
+            thread.stop()
         self._show_camera_idle()
 
     def _toggle_camera_preview(self):
@@ -2368,12 +2402,16 @@ class MainWindow(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.export_preview.setItem(row, p + 1, item)
 
-    def _export_by_date(self):
+    def _export_by_date_as(self, export_format):
+        self._export_by_date(export_format)
+
+    def _export_by_date(self, export_format=None):
         target_date = self.export_date.currentData()
         if not target_date:
             QMessageBox.warning(self, "Lỗi", "Vui lòng chọn ngày!")
             return
-        export_format = self.export_format.currentData() if hasattr(self, "export_format") else "xlsx"
+        if export_format is None:
+            export_format = self.export_format.currentData() if hasattr(self, "export_format") else "xlsx"
         if export_format == "pdf":
             filepath, msg = em.export_by_date_pdf(target_date)
         else:
@@ -2389,10 +2427,14 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Lỗi", msg)
 
-    def _export_monthly(self):
+    def _export_monthly_as(self, export_format):
+        self._export_monthly(export_format)
+
+    def _export_monthly(self, export_format=None):
         month = self.month_combo.currentData()
         year = self.year_spin.value()
-        export_format = self.month_export_format.currentData() if hasattr(self, "month_export_format") else "xlsx"
+        if export_format is None:
+            export_format = self.month_export_format.currentData() if hasattr(self, "month_export_format") else "xlsx"
         if export_format == "pdf":
             filepath, msg = em.export_monthly_report_pdf(year, month)
         else:
