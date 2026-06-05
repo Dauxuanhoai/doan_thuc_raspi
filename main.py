@@ -1638,6 +1638,7 @@ class MainWindow(QMainWindow):
             return
         command_id = data.get("id")
         if command_id and command_id == self._last_lcd_command_id:
+            self._write_lcd_control_state()
             return
         self._last_lcd_command_id = command_id
         action = data.get("action")
@@ -1647,6 +1648,10 @@ class MainWindow(QMainWindow):
         elif action == "stop_session":
             if self.session_active:
                 self._end_session()
+        try:
+            LCD_COMMAND_PATH.unlink()
+        except Exception:
+            pass
         self._write_lcd_control_state()
 
     def _update_lcd_status(self):
