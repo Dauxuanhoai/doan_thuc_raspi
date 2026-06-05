@@ -375,7 +375,7 @@ class CameraThread(QThread):
             if not ret:
                 self.msleep(20)
                 continue
-            frame = cv2.flip(frame, 1)
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
 
             now_ts = datetime.now().timestamp()
             if now_ts - self._last_process_ts >= self._process_interval:
@@ -1268,7 +1268,7 @@ class MainWindow(QMainWindow):
             self.period_combo.addItem(f"Tiết {i}", i)
         sb_layout.addWidget(self.period_combo)
 
-        self.btn_start_session = QPushButton("▶  Bắt Đầu Tiết")
+        self.btn_start_session = QPushButton("▶  Bắt Đầu")
         self.btn_start_session.setObjectName("success")
         self.btn_start_session.clicked.connect(self._toggle_session)
         sb_layout.addWidget(self.btn_start_session)
@@ -1314,7 +1314,7 @@ class MainWindow(QMainWindow):
             border-radius: 8px;
         """)
         self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.camera_label.setText("📷\n\nCamera chưa được bật\nBắt đầu tiết học để kích hoạt camera")
+        self.camera_label.setText("📷\n\nCamera chưa được bật\nCó thể bật bất cứ lúc nào để xem trước")
         cam_layout.addWidget(self.camera_label)
 
         # Scan log
@@ -1770,7 +1770,7 @@ class MainWindow(QMainWindow):
         self.btn_toggle_camera.setObjectName("danger")
         self.btn_toggle_camera.setStyle(self.btn_toggle_camera.style())
         self.camera_label.setText("📷\n\nĐang mở camera...")
-        self.scan_log_label.setText("Camera đang bật. Chỉ ghi điểm danh khi tiết học bắt đầu.")
+        self.scan_log_label.setText("Camera đang bật. Chỉ điểm danh khi bấm Bắt Đầu.")
         self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
         return True
 
@@ -1808,7 +1808,7 @@ class MainWindow(QMainWindow):
         self.session_active = True
 
         settings = db.get_all_settings()
-        self.btn_start_session.setText("⏹  Kết Thúc Tiết")
+        self.btn_start_session.setText("⏹  Kết Thúc")
         self.btn_start_session.setObjectName("danger")
         self.btn_start_session.setStyle(self.btn_start_session.style())
         self.session_info_lbl.setText(
@@ -1823,6 +1823,8 @@ class MainWindow(QMainWindow):
             if self.camera_thread:
                 self.camera_thread.set_session(self.current_session_id)
         db.update_session_status(self.current_session_id, "active")
+        self.scan_log_label.setText("Đang điểm danh tự động khi nhận diện khuôn mặt.")
+        self.scan_log_label.setStyleSheet(f"color: {DARK['green']}; font-size: 11px; padding: 4px;")
 
         self._refresh_attendance_table()
         self.statusBar().showMessage(f"▶ Tiết {period} bắt đầu — {datetime.now().strftime('%H:%M:%S')}")
@@ -1849,13 +1851,13 @@ class MainWindow(QMainWindow):
             db.update_session_status(self.current_session_id, "completed")
 
         self.session_active = False
-        self.btn_start_session.setText("▶  Bắt Đầu Tiết")
+        self.btn_start_session.setText("▶  Bắt Đầu")
         self.btn_start_session.setObjectName("success")
         self.btn_start_session.setStyle(self.btn_start_session.style())
         self.session_info_lbl.setText("Tiết học đã kết thúc")
         self.session_info_lbl.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 12px;")
         if self.camera_thread and self.camera_thread.running:
-            self.scan_log_label.setText("Tiết học đã kết thúc. Camera vẫn đang bật để xem trước.")
+            self.scan_log_label.setText("Đã kết thúc. Camera vẫn đang bật để xem trước.")
             self.scan_log_label.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px; padding: 4px;")
         else:
             self.camera_label.setText("📷\n\nCamera chưa được bật\nCó thể bật bất cứ lúc nào để xem trước")
@@ -1900,7 +1902,7 @@ class MainWindow(QMainWindow):
         self.camera_label.setText(f"📷\n\n{msg}\nKiểm tra quyền camera hoặc đóng app đang dùng camera.")
         if self.session_active:
             self.session_active = False
-            self.btn_start_session.setText("▶  Bắt Đầu Tiết")
+            self.btn_start_session.setText("▶  Bắt Đầu")
             self.btn_start_session.setObjectName("success")
             self.btn_start_session.setStyle(self.btn_start_session.style())
             self.session_info_lbl.setText("Camera không mở được")
