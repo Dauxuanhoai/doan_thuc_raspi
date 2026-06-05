@@ -126,7 +126,7 @@ class Touch:
             sx, sy = rx, ry
         x = self.map_axis(sx, CAL_X_MIN, CAL_X_MAX, W)
         y = self.map_axis(sy, CAL_Y_MIN, CAL_Y_MAX, H)
-        return x, y
+        return W - 1 - x, H - 1 - y
 
 
 class LcdUi:
