@@ -138,6 +138,7 @@ class LcdUi:
         self.selected_ssid = ""
         self.password = ""
         self.shift = False
+        self.key_page = 0
         self.message = ""
         self.last_scan = 0
         self.last_touch = None
@@ -358,24 +359,37 @@ class LcdUi:
     def render_password(self, d):
         self.header(d, "WiFi Password")
         d.text((14, 62), self.selected_ssid[:34], fill=(235, 245, 250), font=self.font)
-        shown = self.password if len(self.password) < 22 else "..." + self.password[-19:]
-        d.rounded_rectangle((12, 86, 468, 118), radius=6, fill=(18, 32, 48), outline=(58, 88, 116), width=2)
+        shown = self.password if len(self.password) < 26 else "..." + self.password[-23:]
+        d.rounded_rectangle((12, 84, 468, 118), radius=6, fill=(18, 32, 48), outline=(58, 88, 116), width=2)
         d.text((20, 92), shown, fill=(255, 214, 0), font=self.font)
-        mode = "ABC" if self.shift else "abc"
-        rows = ["1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm.-_"]
-        y = 126
-        for row in rows:
-            x = 10
-            for ch in row:
-                label = ch.upper() if self.shift and ch.isalpha() else ch
-                self.button(d, (x, y, x + 42, y + 30), label, ("key", label), fill=(24, 40, 58))
-                x += 46
-            y += 34
-        self.button(d, (10, 266, 86, 306), mode, "shift")
-        self.button(d, (94, 266, 184, 306), "SPACE", ("key", " "))
-        self.button(d, (192, 266, 282, 306), "DEL", "del")
-        self.button(d, (290, 266, 374, 306), "JOIN", "join", fill=(18, 72, 48))
-        self.button(d, (382, 266, 470, 306), "BACK", "wifi")
+
+        pages = [
+            list("1234567890.-"),
+            list("abcdefghijkl"),
+            list("mnopqrstuvwxyz"),
+            list("ABCDEFGHIJKL"),
+            list("MNOPQRSTUVWXYZ"),
+            list("@#$%&*_+=!?/"),
+        ]
+        labels = pages[self.key_page % len(pages)]
+        x0, y0 = 12, 126
+        key_w, key_h = 72, 38
+        gap_x, gap_y = 6, 7
+        for i, ch in enumerate(labels[:12]):
+            col = i % 6
+            row = i // 6
+            x = x0 + col * (key_w + gap_x)
+            y = y0 + row * (key_h + gap_y)
+            self.button(d, (x, y, x + key_w, y + key_h), ch, ("key", ch), fill=(24, 40, 58))
+
+        self.button(d, (12, 218, 88, 258), "MORE", "key_page")
+        self.button(d, (96, 218, 188, 258), "SPACE", ("key", " "))
+        self.button(d, (196, 218, 282, 258), "DEL", "del")
+        self.button(d, (290, 218, 374, 258), "JOIN", "join", fill=(18, 72, 48))
+        self.button(d, (382, 218, 468, 258), "BACK", "wifi")
+
+        page_name = ["num", "abc1", "abc2", "ABC1", "ABC2", "sym"][self.key_page % len(pages)]
+        d.text((18, 272), f"Page: {page_name}   Tap MORE for more keys", fill=(235, 245, 250), font=self.font_small)
 
     def render(self, force=False):
         self.buttons = []
@@ -418,6 +432,7 @@ class LcdUi:
             self.selected_ssid = net["ssid"]
             if net["security"]:
                 self.password = ""
+                self.key_page = 0
                 self.screen = "password"
             else:
                 self.password = ""
@@ -426,6 +441,8 @@ class LcdUi:
             self.password += action[1]
         elif action == "shift":
             self.shift = not self.shift
+        elif action == "key_page":
+            self.key_page = (self.key_page + 1) % 6
         elif action == "del":
             self.password = self.password[:-1]
         elif action == "join":
