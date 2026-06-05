@@ -47,19 +47,19 @@ LCD_STATE_PATH = Path("/tmp/classroom_app_state.json")
 CAMERA_OFF_TEXT = "Camera đang tắt\nBấm Bật camera để xem hình trực tiếp"
 
 DARK = {
-    "bg":          "#0F1923",
-    "surface":     "#162030",
-    "surface2":    "#1E2D3D",
-    "surface3":    "#243447",
-    "accent":      "#00D4FF",
-    "accent2":     "#0099CC",
-    "green":       "#00E676",
-    "yellow":      "#FFD600",
-    "red":         "#FF5252",
-    "text":        "#E8F4FD",
-    "text_dim":    "#7FA8C9",
-    "border":      "#2A3F55",
-    "card":        "#172535",
+    "bg":          "#08121A",
+    "surface":     "#0E1B26",
+    "surface2":    "#152736",
+    "surface3":    "#20364A",
+    "accent":      "#18C8E8",
+    "accent2":     "#0E8FA8",
+    "green":       "#22D37F",
+    "yellow":      "#F4C542",
+    "red":         "#FF5C5C",
+    "text":        "#F2F7FA",
+    "text_dim":    "#8FAEC3",
+    "border":      "#244156",
+    "card":        "#0D1A24",
 }
 
 STYLESHEET = f"""
@@ -75,6 +75,16 @@ QWidget {{
 }}
 QFrame#card {{
     background-color: {DARK['card']};
+    border: 1px solid {DARK['border']};
+    border-radius: 8px;
+}}
+QFrame#command_bar {{
+    background-color: {DARK['surface']};
+    border: 1px solid {DARK['border']};
+    border-radius: 8px;
+}}
+QFrame#metric {{
+    background-color: {DARK['surface2']};
     border: 1px solid {DARK['border']};
     border-radius: 8px;
 }}
@@ -272,6 +282,11 @@ QLabel#title {{
     font-size: 22px;
     font-weight: 700;
     color: {DARK['text']};
+}}
+QLabel#panel_title {{
+    font-size: 14px;
+    font-weight: 800;
+    color: {DARK['accent']};
 }}
 QLabel#subtitle {{
     font-size: 13px;
@@ -1314,8 +1329,8 @@ class MainWindow(QMainWindow):
         # Session selector
         session_bar = QFrame()
         session_bar.setObjectName("card")
-        session_bar.setMinimumHeight(92)
-        session_bar.setMaximumHeight(104)
+        session_bar.setMinimumHeight(84)
+        session_bar.setMaximumHeight(96)
         sb_layout = QVBoxLayout(session_bar)
         sb_layout.setContentsMargins(14, 10, 14, 10)
         sb_layout.setSpacing(8)
@@ -1338,7 +1353,7 @@ class MainWindow(QMainWindow):
 
         self.btn_start_session = QPushButton("Bắt đầu")
         self.btn_start_session.setObjectName("success")
-        self.btn_start_session.setMinimumSize(120, 44)
+        self.btn_start_session.setMinimumSize(128, 42)
         self.btn_start_session.clicked.connect(self._toggle_session)
         session_controls.addWidget(self.btn_start_session)
         session_controls.addStretch()
@@ -1359,14 +1374,14 @@ class MainWindow(QMainWindow):
         cam_card = QFrame()
         cam_card.setObjectName("card")
         cam_layout = QVBoxLayout(cam_card)
-        cam_layout.setContentsMargins(12, 12, 12, 12)
+        cam_layout.setContentsMargins(12, 10, 12, 10)
+        cam_layout.setSpacing(8)
 
         cam_title = QLabel("Camera")
         cam_title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {DARK['accent']};")
-        cam_layout.addWidget(cam_title)
-
         cam_control_row = QHBoxLayout()
         cam_control_row.setSpacing(10)
+        cam_control_row.addWidget(cam_title)
         self.btn_toggle_camera = QPushButton("Bật camera")
         self.btn_toggle_camera.setObjectName("primary")
         self.btn_toggle_camera.setMinimumSize(190, 46)
@@ -1388,7 +1403,7 @@ class MainWindow(QMainWindow):
         cam_layout.addLayout(cam_control_row)
 
         self.camera_label = QLabel()
-        self.camera_label.setMinimumSize(300, 220)
+        self.camera_label.setMinimumSize(300, 260)
         self.camera_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.camera_label.setStyleSheet(f"""
             background-color: {DARK['surface']};
@@ -1481,34 +1496,36 @@ class MainWindow(QMainWindow):
         hdr.addStretch()
         layout.addLayout(hdr)
 
-        toolbar = QHBoxLayout()
+        command_bar = QFrame()
+        command_bar.setObjectName("command_bar")
+        command_bar.setMinimumHeight(72)
+        toolbar = QHBoxLayout(command_bar)
+        toolbar.setContentsMargins(12, 10, 12, 10)
         toolbar.setSpacing(10)
         btn_add = QPushButton("Thêm sinh viên")
         btn_add.setObjectName("primary")
-        btn_add.setMinimumSize(230, 50)
+        btn_add.setMinimumSize(210, 48)
         btn_add.clicked.connect(self._add_student)
         self.btn_add_student = btn_add
         toolbar.addWidget(btn_add)
+
+        self.sv_total_lbl = QLabel("Tổng: 0")
+        self.sv_total_lbl.setObjectName("subtitle")
+        self.sv_total_lbl.setMinimumWidth(100)
+        toolbar.addWidget(self.sv_total_lbl)
+        self.sv_encoded_lbl = QLabel("Khuôn mặt: 0")
+        self.sv_encoded_lbl.setStyleSheet(f"color: {DARK['green']}; font-weight: 700;")
+        self.sv_encoded_lbl.setMinimumWidth(130)
+        toolbar.addWidget(self.sv_encoded_lbl)
         toolbar.addStretch()
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Tìm kiếm sinh viên...")
-        self.search_edit.setMaximumWidth(260)
+        self.search_edit.setMaximumWidth(240)
         self.search_edit.setMinimumHeight(46)
         self.search_edit.textChanged.connect(self._filter_students)
         toolbar.addWidget(self.search_edit)
-        layout.addLayout(toolbar)
-
-        # Stats row
-        stats_row = QHBoxLayout()
-        self.sv_total_lbl = QLabel("Tổng: 0 sinh viên")
-        self.sv_total_lbl.setStyleSheet(f"color: {DARK['text_dim']};")
-        self.sv_encoded_lbl = QLabel("Đã đăng ký khuôn mặt: 0")
-        self.sv_encoded_lbl.setStyleSheet(f"color: {DARK['green']};")
-        stats_row.addWidget(self.sv_total_lbl)
-        stats_row.addWidget(self.sv_encoded_lbl)
-        stats_row.addStretch()
-        layout.addLayout(stats_row)
+        layout.addWidget(command_bar)
 
         # Table
         self.students_table = QTableWidget(0, 5)
@@ -1551,88 +1568,92 @@ class MainWindow(QMainWindow):
         hdr.addWidget(title)
         layout.addLayout(hdr)
 
-        tabs = QTabWidget()
+        report_panels = QHBoxLayout()
+        report_panels.setSpacing(12)
 
-        # ── Tab: Xuất theo ngày ───────────────────────────────────────────────
-        day_tab = QWidget()
-        dl = QVBoxLayout(day_tab)
-        dl.setContentsMargins(20, 20, 20, 20)
+        day_card = QFrame()
+        day_card.setObjectName("card")
+        dl = QVBoxLayout(day_card)
+        dl.setContentsMargins(14, 14, 14, 14)
+        dl.setSpacing(10)
+        day_title = QLabel("Báo cáo theo ngày")
+        day_title.setObjectName("panel_title")
+        dl.addWidget(day_title)
 
         day_form = QHBoxLayout()
-        day_form.addWidget(QLabel("Chọn ngày:"))
+        day_form.addWidget(QLabel("Ngày:"))
         self.export_date = QComboBox()
         self._populate_date_combo()
         day_form.addWidget(self.export_date)
-        day_form.addStretch()
         dl.addLayout(day_form)
 
         day_buttons = QHBoxLayout()
         btn_export_day_xlsx = QPushButton("Xuất Excel theo ngày")
         btn_export_day_xlsx.setObjectName("primary")
-        btn_export_day_xlsx.setMinimumSize(220, 44)
+        btn_export_day_xlsx.setMinimumSize(180, 44)
         btn_export_day_xlsx.clicked.connect(lambda: self._export_by_date_as("xlsx"))
         day_buttons.addWidget(btn_export_day_xlsx)
         btn_export_day_pdf = QPushButton("Xuất PDF theo ngày")
         btn_export_day_pdf.setObjectName("success")
-        btn_export_day_pdf.setMinimumSize(220, 44)
+        btn_export_day_pdf.setMinimumSize(180, 44)
         btn_export_day_pdf.clicked.connect(lambda: self._export_by_date_as("pdf"))
         day_buttons.addWidget(btn_export_day_pdf)
-        day_buttons.addStretch()
         dl.addLayout(day_buttons)
 
         self.export_preview = QTableWidget(0, 5)
         self.export_preview.setHorizontalHeaderLabels(["Mã SV", "Họ Tên", "Tiết 1", "Tiết 2", "Tiết 3"])
         self.export_preview.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.export_preview.verticalHeader().setVisible(False)
-        dl.addWidget(QLabel("Xem trước:"))
-        dl.addWidget(self.export_preview)
+        dl.addWidget(self.export_preview, 1)
 
-        btn_preview = QPushButton("Xem Trước Dữ Liệu")
-        btn_preview.setMinimumHeight(36)
+        btn_preview = QPushButton("Xem trước dữ liệu")
+        btn_preview.setMinimumHeight(40)
         btn_preview.clicked.connect(self._preview_attendance)
         dl.addWidget(btn_preview)
 
-        tabs.addTab(day_tab, "Theo Ngày")
+        month_card = QFrame()
+        month_card.setObjectName("card")
+        ml = QVBoxLayout(month_card)
+        ml.setContentsMargins(14, 14, 14, 14)
+        ml.setSpacing(10)
+        month_title = QLabel("Báo cáo tháng")
+        month_title.setObjectName("panel_title")
+        ml.addWidget(month_title)
 
-        # ── Tab: Báo cáo tháng ────────────────────────────────────────────────
-        month_tab = QWidget()
-        ml = QVBoxLayout(month_tab)
-        ml.setContentsMargins(20, 20, 20, 20)
-
-        month_form = QHBoxLayout()
-        month_form.addWidget(QLabel("Tháng:"))
+        month_form = QGridLayout()
+        month_form.setHorizontalSpacing(8)
+        month_form.setVerticalSpacing(10)
+        month_form.addWidget(QLabel("Tháng:"), 0, 0)
         self.month_combo = QComboBox()
         for m in range(1, 13):
             self.month_combo.addItem(f"Tháng {m}", m)
         self.month_combo.setCurrentIndex(datetime.now().month - 1)
-        month_form.addWidget(self.month_combo)
+        month_form.addWidget(self.month_combo, 0, 1)
 
-        month_form.addWidget(QLabel("Năm:"))
+        month_form.addWidget(QLabel("Năm:"), 1, 0)
         self.year_spin = QSpinBox()
         self.year_spin.setRange(2020, 2030)
         self.year_spin.setValue(datetime.now().year)
-        month_form.addWidget(self.year_spin)
-        month_form.addStretch()
+        month_form.addWidget(self.year_spin, 1, 1)
         ml.addLayout(month_form)
 
-        month_buttons = QHBoxLayout()
+        month_buttons = QVBoxLayout()
         btn_export_month_xlsx = QPushButton("Xuất Excel tháng")
         btn_export_month_xlsx.setObjectName("primary")
-        btn_export_month_xlsx.setMinimumSize(210, 44)
+        btn_export_month_xlsx.setMinimumHeight(46)
         btn_export_month_xlsx.clicked.connect(lambda: self._export_monthly_as("xlsx"))
         month_buttons.addWidget(btn_export_month_xlsx)
         btn_export_month_pdf = QPushButton("Xuất PDF tháng")
         btn_export_month_pdf.setObjectName("success")
-        btn_export_month_pdf.setMinimumSize(210, 44)
+        btn_export_month_pdf.setMinimumHeight(46)
         btn_export_month_pdf.clicked.connect(lambda: self._export_monthly_as("pdf"))
         month_buttons.addWidget(btn_export_month_pdf)
-        month_buttons.addStretch()
         ml.addLayout(month_buttons)
         ml.addStretch()
 
-        tabs.addTab(month_tab, "Báo Cáo Tháng")
-
-        layout.addWidget(tabs)
+        report_panels.addWidget(day_card, 3)
+        report_panels.addWidget(month_card, 1)
+        layout.addLayout(report_panels, 1)
         return page
 
     def _create_settings_page(self):
@@ -2248,8 +2269,8 @@ class MainWindow(QMainWindow):
 
         total = len(db.get_all_students())
         encoded = sum(1 for s in db.get_all_students() if s.get("face_encoding"))
-        self.sv_total_lbl.setText(f"Tổng: {total} sinh viên")
-        self.sv_encoded_lbl.setText(f"Da dang ky khuon mat: {encoded}")
+        self.sv_total_lbl.setText(f"Tổng: {total}")
+        self.sv_encoded_lbl.setText(f"Khuôn mặt: {encoded}")
 
         self.students_table.setRowCount(0)
         for student in students:
