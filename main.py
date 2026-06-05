@@ -458,16 +458,26 @@ class AddStudentDialog(QDialog):
         self.preview_frozen = False
         self.camera_thread = None
         self.setWindowTitle("Thêm sinh viên" if not student_data else "Sửa sinh viên")
-        self.setMinimumSize(760, 430)
+        self.setMinimumSize(820, 540)
+        self.resize(840, 560)
         self.setStyleSheet(STYLESHEET + f"QDialog {{ background-color: {DARK['bg']}; }}")
         self._setup_ui()
         if student_data:
             self._fill_data()
 
+    def _safe_detect_faces(self, frame):
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+            return gray, fm.detect_faces(gray)
+        except Exception as exc:
+            self.face_status.setText(f"Lỗi xử lý ảnh: {exc}")
+            self.face_status.setStyleSheet(f"color: {DARK['red']}; font-size: 12px;")
+            return None, []
+
     def _setup_ui(self):
         layout = QHBoxLayout(self)
-        layout.setSpacing(20)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+        layout.setContentsMargins(14, 14, 14, 14)
 
         # Left: Camera
         left = QVBoxLayout()
@@ -476,8 +486,8 @@ class AddStudentDialog(QDialog):
         left.addWidget(cam_label)
 
         self.camera_view = QLabel()
-        self.camera_view.setMinimumSize(260, 185)
-        self.camera_view.setMaximumSize(340, 240)
+        self.camera_view.setMinimumSize(300, 220)
+        self.camera_view.setMaximumSize(360, 250)
         self.camera_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.camera_view.setStyleSheet(f"""
             background-color: {DARK['surface']};
@@ -494,7 +504,7 @@ class AddStudentDialog(QDialog):
         for pose, label in (("front", "Chính diện"), ("left", "Trái"), ("right", "Phải")):
             btn = QPushButton(label)
             btn.setCheckable(True)
-            btn.setMinimumHeight(38)
+            btn.setMinimumHeight(42)
             btn.clicked.connect(lambda _, p=pose: self._set_pose(p))
             pose_row.addWidget(btn)
             self.pose_buttons[pose] = btn
@@ -502,22 +512,26 @@ class AddStudentDialog(QDialog):
 
         btn_cam = QPushButton("Bật camera")
         btn_cam.setObjectName("primary")
+        btn_cam.setMinimumHeight(44)
         btn_cam.clicked.connect(self._toggle_camera)
         self.btn_cam = btn_cam
         left.addWidget(btn_cam)
 
         btn_capture = QPushButton("Chụp ảnh")
+        btn_capture.setMinimumHeight(44)
         btn_capture.clicked.connect(self._capture)
         self.btn_capture = btn_capture
         btn_capture.setEnabled(False)
         left.addWidget(btn_capture)
 
         btn_upload = QPushButton("Tải ảnh lên")
+        btn_upload.setMinimumHeight(42)
         btn_upload.clicked.connect(self._upload_photo)
         left.addWidget(btn_upload)
 
         self.face_status = QLabel("Cần chụp 3 góc: chính diện, trái, phải")
-        self.face_status.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 11px;")
+        self.face_status.setWordWrap(True)
+        self.face_status.setStyleSheet(f"color: {DARK['text_dim']}; font-size: 12px;")
         self.face_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         left.addWidget(self.face_status)
         self._set_pose("front", refresh_only=True)
@@ -543,16 +557,17 @@ class AddStudentDialog(QDialog):
         form.addRow("Họ và tên *", self.name_edit)
 
         right.addLayout(form)
-        right.addSpacing(20)
+        right.addSpacing(10)
 
         # Note
-        note = QLabel("Yêu cầu ảnh:\n- 1 ảnh chính diện\n- 1 ảnh nghiêng trái\n- 1 ảnh nghiêng phải\n- Đủ sáng, không đeo khẩu trang")
+        note = QLabel("Chụp đủ 3 góc khuôn mặt. Ảnh nên đủ sáng, nhìn rõ mặt, không đeo khẩu trang.")
+        note.setWordWrap(True)
         note.setStyleSheet(f"""
             background-color: {DARK['surface2']};
             border: 1px solid {DARK['border']};
             border-radius: 8px;
             color: {DARK['text_dim']};
-            padding: 12px;
+            padding: 10px;
             font-size: 12px;
         """)
         right.addWidget(note)
@@ -561,9 +576,11 @@ class AddStudentDialog(QDialog):
         # Buttons
         btn_layout = QHBoxLayout()
         btn_cancel = QPushButton("Hủy")
+        btn_cancel.setMinimumSize(120, 44)
         btn_cancel.clicked.connect(self.reject)
         btn_save = QPushButton("Lưu sinh viên")
         btn_save.setObjectName("primary")
+        btn_save.setMinimumSize(170, 44)
         btn_save.clicked.connect(self._save)
         btn_layout.addWidget(btn_cancel)
         btn_layout.addWidget(btn_save)
@@ -671,8 +688,7 @@ class AddStudentDialog(QDialog):
         self.preview_frozen = True
         self.btn_capture.setText("Chụp lại")
         self._show_cv_frame(frame)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = fm.detect_faces(gray)
+        gray, faces = self._safe_detect_faces(frame)
         if len(faces) > 0:
             self._update_pose_status()
         else:
@@ -691,8 +707,7 @@ class AddStudentDialog(QDialog):
                 self.captured_frame = img
                 self.pose_frames[self.current_pose] = img
                 self._show_cv_frame(img)
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                faces = fm.detect_faces(gray)
+                gray, faces = self._safe_detect_faces(img)
                 if len(faces) > 0:
                     self._update_pose_status()
                 else:
@@ -719,12 +734,12 @@ class AddStudentDialog(QDialog):
         face_encoding = None
 
         if not self.student_data and db.get_student(sid):
-            QMessageBox.warning(self, "Trung ma", "Ma sinh vien da ton tai, khong the them lai.")
+            QMessageBox.warning(self, "Trùng mã", "Mã sinh viên đã tồn tại, không thể thêm lại.")
             return
 
         frames_to_save = [self.pose_frames[k] for k in ("front", "left", "right") if k in self.pose_frames]
         if not self.student_data and len(frames_to_save) < 3:
-            QMessageBox.warning(self, "Thieu anh", "Vui long chup/tai du 3 anh: chinh dien, nghieng trai, nghieng phai.")
+            QMessageBox.warning(self, "Thiếu ảnh", "Vui lòng chụp/tải đủ 3 ảnh: chính diện, nghiêng trái, nghiêng phải.")
             return
 
         encodings = []
@@ -732,11 +747,14 @@ class AddStudentDialog(QDialog):
             saved = fm.save_student_photo(sid, frame, pose)
             if pose == "front":
                 photo_path = saved
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = fm.detect_faces(gray)
+            gray, faces = self._safe_detect_faces(frame)
             if len(faces) > 0:
                 x, y, w, h = max(faces, key=lambda f: f[2]*f[3])
-                encodings.append(fm.extract_encoding_from_frame(gray, x, y, w, h))
+                try:
+                    encodings.append(fm.extract_encoding_from_frame(gray, x, y, w, h))
+                except Exception as exc:
+                    QMessageBox.warning(self, "Lỗi ảnh", f"Không trích xuất được khuôn mặt ở góc {pose}: {exc}")
+                    return
 
         if encodings:
             face_encoding = np.mean(np.array(encodings, dtype=np.float32), axis=0).tolist()
@@ -937,7 +955,7 @@ class SettingsDialog(QDialog):
         af.addRow("Thời gian ân hạn vào lớp:", self.grace_period)
 
         note = QLabel(
-            "Nguong danh vang: so lan quet khong thay\n"
+            "Ngưỡng đánh vắng: số lần quét không thấy\n"
             "mặt liên tiếp sẽ đánh là vắng mặt.\n\n"
             "Thoi gian an han: sinh vien den tre trong\n"
             "khoảng này vẫn được tính là có mặt."
@@ -1445,7 +1463,7 @@ class MainWindow(QMainWindow):
         self.search_edit.textChanged.connect(self._filter_students)
         hdr.addWidget(self.search_edit)
 
-        btn_add = QPushButton("Thêm Sinh Viên")
+        btn_add = QPushButton("Thêm sinh viên")
         btn_add.setObjectName("primary")
         btn_add.setMinimumSize(220, 46)
         btn_add.clicked.connect(self._add_student)
@@ -1619,7 +1637,7 @@ class MainWindow(QMainWindow):
     # ── Status Bar ─────────────────────────────────────────────────────────────
 
     def _setup_status_bar(self):
-        self.statusBar().showMessage("He thong san sang  |  " + datetime.now().strftime("%d/%m/%Y"))
+        self.statusBar().showMessage("Hệ thống sẵn sàng  |  " + datetime.now().strftime("%d/%m/%Y"))
 
     # ── Clock ──────────────────────────────────────────────────────────────────
 
@@ -1706,7 +1724,7 @@ class MainWindow(QMainWindow):
             total = len(students)
             present = absent = half = 0
             period = self.period_combo.currentData() if hasattr(self, "period_combo") else None
-            status = "San sang"
+            status = "Sẵn sàng"
             if self.session_active and self.current_session_id:
                 status = "Đang điểm danh"
                 for item in db.get_attendance_by_session(self.current_session_id):
@@ -1720,12 +1738,12 @@ class MainWindow(QMainWindow):
             else:
                 state = self._get_time_state()
                 if state["type"] == "period":
-                    status = f"Cho tiet {state['period']}"
+                    status = f"Chờ tiết {state['period']}"
                     period = state["period"]
                 elif state["type"] == "break":
                     status = "Đang ra chơi"
                 else:
-                    status = "Ngoai gio hoc"
+                    status = "Ngoài giờ học"
             last_seen = self._last_displayed_name
             if datetime.now().timestamp() - self._last_displayed_face_ts > 12:
                 last_seen = ""
@@ -2220,7 +2238,7 @@ class MainWindow(QMainWindow):
             self.students_table.setItem(row, 2, name_item)
 
             has_enc = student.get("face_encoding") is not None
-            enc_item = QTableWidgetItem("Da dang ky" if has_enc else "Chua co")
+            enc_item = QTableWidgetItem("Đã đăng ký" if has_enc else "Chưa có")
             enc_item.setForeground(QColor(DARK['green'] if has_enc else DARK['yellow']))
             enc_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.students_table.setItem(row, 3, enc_item)
@@ -2362,7 +2380,7 @@ class MainWindow(QMainWindow):
             filepath, msg = em.export_by_date(target_date)
         if filepath:
             reply = QMessageBox.information(
-                self, "Xuat Thanh Cong",
+                self, "Xuất thành công",
                 f"{msg}\n\nFile: {filepath}\n\nMở file không?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
@@ -2380,7 +2398,7 @@ class MainWindow(QMainWindow):
         else:
             filepath, msg = em.export_monthly_report(year, month)
         if filepath:
-            QMessageBox.information(self, "Xuat Thanh Cong", f"{msg}\n\nFile: {filepath}")
+            QMessageBox.information(self, "Xuất thành công", f"{msg}\n\nFile: {filepath}")
         else:
             QMessageBox.warning(self, "Lỗi", msg)
 

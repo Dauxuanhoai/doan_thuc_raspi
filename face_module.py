@@ -42,14 +42,28 @@ def get_face_cascade():
     return FACE_CASCADE
 
 def detect_faces(frame_gray):
-    """Phát hiện khuôn mặt trong ảnh grayscale"""
-    faces = FACE_CASCADE.detectMultiScale(
-        frame_gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(60, 60),
-        flags=cv2.CASCADE_SCALE_IMAGE
-    )
+    """Phát hiện khuôn mặt, không để lỗi OpenCV làm sập ứng dụng."""
+    if frame_gray is None:
+        return []
+    if len(frame_gray.shape) == 3:
+        frame_gray = cv2.cvtColor(frame_gray, cv2.COLOR_BGR2GRAY)
+    if frame_gray.size == 0:
+        return []
+    frame_gray = np.ascontiguousarray(frame_gray, dtype=np.uint8)
+    h, w = frame_gray.shape[:2]
+    if h < 40 or w < 40 or FACE_CASCADE.empty():
+        return []
+    try:
+        faces = FACE_CASCADE.detectMultiScale(
+            frame_gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(50, 50),
+            flags=cv2.CASCADE_SCALE_IMAGE
+        )
+    except cv2.error as exc:
+        print(f"Lỗi OpenCV khi phát hiện khuôn mặt: {exc}", flush=True)
+        return []
     return faces if len(faces) > 0 else []
 
 def extract_face_region(frame_gray, x, y, w, h, size=(100, 100)):

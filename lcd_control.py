@@ -39,6 +39,8 @@ CAL_X_MAX = 3880
 CAL_Y_MIN = 3936
 CAL_Y_MAX = 227
 SWAP_AXES = True
+TOUCH_X_OFFSET = 0
+TOUCH_Y_OFFSET = 0
 
 
 def run(cmd, timeout=8):
@@ -130,7 +132,9 @@ class Touch:
             sx, sy = rx, ry
         x = self.map_axis(sx, CAL_X_MIN, CAL_X_MAX, W)
         y = self.map_axis(sy, CAL_Y_MIN, CAL_Y_MAX, H)
-        return W - 1 - x, H - 1 - y
+        x = W - 1 - x + TOUCH_X_OFFSET
+        y = H - 1 - y + TOUCH_Y_OFFSET
+        return max(0, min(W - 1, x)), max(0, min(H - 1, y))
 
 
 class LcdUi:
@@ -216,6 +220,12 @@ class LcdUi:
             return out.split(":", 1)[1] or "Disconnected"
         return "Disconnected"
 
+    def wifi_status(self):
+        ssid = self.wifi_name()
+        ip = self.ip_addr()
+        connected = ssid not in ("", "Disconnected", "--") and ip != "No IP"
+        return ssid, ip, connected
+
     def scan_wifi(self):
         if self.scanning_wifi:
             return
@@ -287,9 +297,16 @@ class LcdUi:
             out = run(["nmcli", "dev", "wifi", "connect", ssid, "password", password], timeout=25)
         else:
             out = run(["nmcli", "dev", "wifi", "connect", ssid], timeout=25)
-        self.message = "WiFi connected" if "successfully" in out.lower() else out[:54]
+        ok = "successfully" in out.lower()
+        ssid_now, ip_now, connected = self.wifi_status()
+        if ok or connected:
+            result_message = f"Connected: {ssid_now[:18]} IP {ip_now}"
+        else:
+            result_message = f"Failed: {out[:44]}"
         self.password = ""
-        self.screen = "home"
+        self.screen = "wifi"
+        self.scan_wifi()
+        self.message = result_message
 
     def draw_bg(self, d):
         for y in range(H):
@@ -336,7 +353,9 @@ class LcdUi:
         d.rounded_rectangle((12, 64, 468, 146), radius=8, fill=(18, 32, 48), outline=(58, 88, 116), width=2)
         d.text((24, 74), app, fill=app_color, font=self.font_mid)
         d.text((24, 105), line[:36], fill=(235, 245, 250), font=self.font)
-        d.text((24, 126), f"WiFi: {self.wifi_name()[:20]}   IP: {self.ip_addr()}", fill=(255, 214, 0), font=self.font_small)
+        ssid, ip, connected = self.wifi_status()
+        wifi_line = f"{'ONLINE' if connected else 'OFFLINE'}  {ssid[:18]}  IP: {ip}"
+        d.text((24, 126), wifi_line[:48], fill=(255, 214, 0), font=self.font_small)
 
         self.button(d, (14, 154, 466, 220), action_label, action, fill=action_fill)
         self.button(d, (14, 252, 226, 312), "WIFI", "wifi", fill=(25, 52, 82))
@@ -348,10 +367,13 @@ class LcdUi:
         self.header(d, "WiFi Networks")
         self.button(d, (365, 62, 468, 98), "BACK", "home")
         self.button(d, (250, 62, 354, 98), "SCAN", "scan")
+        ssid_now, ip_now, connected = self.wifi_status()
+        status = f"{'ONLINE' if connected else 'OFFLINE'}: {ssid_now[:18]}  {ip_now}"
+        d.text((14, 102), status[:46], fill=(0, 230, 118) if connected else (255, 214, 0), font=self.font_small)
         if (not self.networks or time.time() - self.last_scan > 60) and not self.scanning_wifi:
             self.scan_wifi()
-        y = 106
-        for i, net in enumerate(self.networks[:6]):
+        y = 124
+        for i, net in enumerate(self.networks[:5]):
             ssid = net["ssid"][:24]
             sig = net["signal"]
             sec = "LOCK" if net["security"] else "OPEN"
@@ -458,7 +480,7 @@ class LcdUi:
         print(f"touch mapped={x},{y} raw={self.touch.raw_x},{self.touch.raw_y}", flush=True)
         for rect, action in list(self.buttons):
             x1, y1, x2, y2 = rect
-            pad = 24
+            pad = 8
             if x1 - pad <= x <= x2 + pad and y1 - pad <= y <= y2 + pad:
                 self.handle(action)
                 return
@@ -470,7 +492,7 @@ class LcdUi:
             dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
             if nearest is None or dist < nearest[0]:
                 nearest = (dist, action)
-        if nearest and nearest[0] <= 62:
+        if nearest and nearest[0] <= 34:
             self.handle(nearest[1])
             return
         self.message = f"Touch {x},{y}"
