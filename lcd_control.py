@@ -62,6 +62,7 @@ class Touch:
         self.raw_x = 0
         self.raw_y = 0
         self.down = False
+        self.was_down = False
         self.seen_abs = False
         self.open()
 
@@ -109,6 +110,9 @@ class Touch:
             pass
         except OSError:
             self.close()
+        if point and self.was_down:
+            point = None
+        self.was_down = self.down
         return point
 
     def map_axis(self, value, lo, hi, size):
@@ -475,11 +479,10 @@ class LcdUi:
     def loop(self):
         last_render = 0
         while self.running:
-            point = self.touch.poll(0.15)
+            point = self.touch.poll(0.05)
             if point:
                 self.click(*point)
-                time.sleep(0.2)
-            if self.screen == "home" and time.time() - last_render > 2:
+            if self.screen == "home" and time.time() - last_render > 0.25:
                 self.render()
                 last_render = time.time()
 
