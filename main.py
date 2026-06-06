@@ -1062,7 +1062,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Cài đặt hệ thống")
-        self.setMinimumSize(660, 540)
+        self.setMinimumSize(720, 560)
         self.setStyleSheet(QSS + f"QDialog {{ background-color: {C['bg']}; }}")
         self._build()
         self._load()
@@ -1090,31 +1090,48 @@ class SettingsDialog(QDialog):
         self.total_p.setRange(1, 6)
         self.total_p.setValue(3)
         self.total_p.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self.total_p.valueChanged.connect(self._sync_period_visibility)
+        self.total_p.valueChanged.connect(self._rebuild_period_preview)
         tf.addRow("Số tiết / ngày:", self.total_p)
 
         tf.addRow(make_label(""))
-        # Dynamic period fields
-        self.p_widgets = {}
-        for p in range(1, 7):
-            t_lbl  = make_label(f"── Tiết {p} ──────────────")
-            ts     = QTimeEdit(); ts.setDisplayFormat("HH:mm"); ts.setButtonSymbols(QTimeEdit.ButtonSymbols.NoButtons)
-            te     = QTimeEdit(); te.setDisplayFormat("HH:mm"); te.setButtonSymbols(QTimeEdit.ButtonSymbols.NoButtons)
-            ts_lbl = make_label(f"Bắt đầu Tiết {p}:")
-            te_lbl = make_label(f"Kết thúc Tiết {p}:")
-            self.p_widgets[p] = (t_lbl, ts_lbl, ts, te_lbl, te)
-            tf.addRow(t_lbl)
-            tf.addRow(ts_lbl, ts)
-            tf.addRow(te_lbl, te)
-            if p == 1:
-                self.brk_title  = make_label("── Nghỉ giải lao ─────────")
-                self.brk_s      = QTimeEdit(); self.brk_s.setDisplayFormat("HH:mm"); self.brk_s.setButtonSymbols(QTimeEdit.ButtonSymbols.NoButtons)
-                self.brk_e      = QTimeEdit(); self.brk_e.setDisplayFormat("HH:mm"); self.brk_e.setButtonSymbols(QTimeEdit.ButtonSymbols.NoButtons)
-                self.brk_s_lbl  = make_label("Bắt đầu nghỉ:")
-                self.brk_e_lbl  = make_label("Kết thúc nghỉ:")
-                tf.addRow(self.brk_title)
-                tf.addRow(self.brk_s_lbl, self.brk_s)
-                tf.addRow(self.brk_e_lbl, self.brk_e)
+        self.first_start = QTimeEdit()
+        self.first_start.setDisplayFormat("HH:mm")
+        self.first_start.setButtonSymbols(QTimeEdit.ButtonSymbols.NoButtons)
+        self.first_start.timeChanged.connect(self._rebuild_period_preview)
+        tf.addRow("Giờ bắt đầu tiết 1:", self.first_start)
+
+        self.period_len = QSpinBox()
+        self.period_len.setRange(15, 180)
+        self.period_len.setSuffix(" phút")
+        self.period_len.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.period_len.valueChanged.connect(self._rebuild_period_preview)
+        tf.addRow("Thời lượng mỗi tiết:", self.period_len)
+
+        self.break_len = QSpinBox()
+        self.break_len.setRange(0, 60)
+        self.break_len.setSuffix(" phút")
+        self.break_len.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.break_len.valueChanged.connect(self._rebuild_period_preview)
+        tf.addRow("Nghỉ giữa các tiết:", self.break_len)
+
+        note_time = QLabel("Chỉ cần cài số tiết, giờ bắt đầu, thời lượng tiết và phút nghỉ. Ứng dụng sẽ tự tính giờ bắt đầu/kết thúc từng tiết bên dưới.")
+        note_time.setWordWrap(True)
+        note_time.setStyleSheet(f"color: {C['text_dim']}; font-size: 12px;")
+        tf.addRow(note_time)
+
+        self.period_preview = QTextEdit()
+        self.period_preview.setReadOnly(True)
+        self.period_preview.setMinimumHeight(150)
+        self.period_preview.setStyleSheet(f"""
+            background-color: {C['surface2']};
+            border: 1px solid {C['border']};
+            border-radius: 8px;
+            color: {C['text']};
+            font-family: 'DejaVu Sans Mono', 'Courier New', monospace;
+            font-size: 12px;
+            padding: 10px;
+        """)
+        tf.addRow("Lịch tự tính:", self.period_preview)
 
         tscroll = QScrollArea()
         tscroll.setWidgetResizable(True)
@@ -1162,6 +1179,9 @@ class SettingsDialog(QDialog):
         root.addWidget(tabs)
 
         btns = QHBoxLayout()
+        self.save_msg = QLabel("")
+        self.save_msg.setStyleSheet(f"color: {C['green']}; font-size: 13px;")
+        btns.addWidget(self.save_msg)
         btns.addStretch()
         bc = QPushButton("Hủy")
         bc.setMinimumSize(110, 44)
@@ -1178,43 +1198,71 @@ class SettingsDialog(QDialog):
         s = db.get_all_settings()
         self.class_name.setText(s.get("class_name", ""))
         self.total_p.setValue(int(s.get("total_periods", 3)))
-        for p in range(1, 7):
-            _, _, ts, _, te = self.p_widgets[p]
-            ts.setTime(QTime.fromString(s.get(f"period_{p}_start", "07:00"), "HH:mm"))
-            te.setTime(QTime.fromString(s.get(f"period_{p}_end",   "08:30"), "HH:mm"))
-        self.brk_s.setTime(QTime.fromString(s.get("break_start", "08:30"), "HH:mm"))
-        self.brk_e.setTime(QTime.fromString(s.get("break_end",   "08:45"), "HH:mm"))
+        p1_start = QTime.fromString(s.get("period_1_start", "07:00"), "HH:mm")
+        p1_end = QTime.fromString(s.get("period_1_end", "08:30"), "HH:mm")
+        b_start = QTime.fromString(s.get("break_start", "08:30"), "HH:mm")
+        b_end = QTime.fromString(s.get("break_end", "08:45"), "HH:mm")
+        if not p1_start.isValid():
+            p1_start = QTime(7, 0)
+        if not p1_end.isValid():
+            p1_end = p1_start.addSecs(90 * 60)
+        if not b_start.isValid():
+            b_start = p1_end
+        if not b_end.isValid():
+            b_end = b_start.addSecs(15 * 60)
+        self.first_start.setTime(p1_start)
+        self.period_len.setValue(max(15, p1_start.secsTo(p1_end) // 60))
+        self.break_len.setValue(max(0, b_start.secsTo(b_end) // 60))
         self.scan_ivl.setValue(int(s.get("scan_interval_seconds", 30)))
         self.abs_thr.setValue(int(s.get("absent_threshold", 3)))
         self.grace.setValue(int(s.get("grace_period_minutes", 5)))
-        self._sync_period_visibility()
+        self._rebuild_period_preview()
 
-    def _sync_period_visibility(self):
+    def _computed_periods(self):
         total = self.total_p.value()
-        for p, wl in self.p_widgets.items():
-            for w in wl:
-                w.setVisible(p <= total)
-        show_brk = total >= 2
-        for w in (self.brk_title, self.brk_s_lbl, self.brk_s, self.brk_e_lbl, self.brk_e):
-            w.setVisible(show_brk)
+        start = self.first_start.time()
+        period_minutes = self.period_len.value()
+        break_minutes = self.break_len.value()
+        rows = []
+        cur = start
+        for p in range(1, total + 1):
+            end = cur.addSecs(period_minutes * 60)
+            rows.append((p, cur, end))
+            cur = end.addSecs(break_minutes * 60)
+        return rows
+
+    def _rebuild_period_preview(self):
+        if not hasattr(self, "period_preview"):
+            return
+        lines = []
+        rows = self._computed_periods()
+        for p, start, end in rows:
+            lines.append(f"Tiết {p}: {start.toString('HH:mm')} - {end.toString('HH:mm')}")
+            if p < len(rows) and self.break_len.value() > 0:
+                bs = end
+                be = end.addSecs(self.break_len.value() * 60)
+                lines.append(f"  Nghỉ: {bs.toString('HH:mm')} - {be.toString('HH:mm')}")
+        self.period_preview.setText("\n".join(lines))
 
     def _save(self):
         d = {
             "class_name":    self.class_name.text(),
             "total_periods": str(self.total_p.value()),
-            "break_start":   self.brk_s.time().toString("HH:mm"),
-            "break_end":     self.brk_e.time().toString("HH:mm"),
             "scan_interval_seconds": str(self.scan_ivl.value()),
             "absent_threshold":      str(self.abs_thr.value()),
             "grace_period_minutes":  str(self.grace.value()),
         }
+        rows = self._computed_periods()
+        d["break_start"] = rows[0][2].toString("HH:mm") if len(rows) >= 2 else ""
+        d["break_end"] = rows[0][2].addSecs(self.break_len.value() * 60).toString("HH:mm") if len(rows) >= 2 else ""
         for p in range(1, 7):
-            _, _, ts, _, te = self.p_widgets[p]
-            d[f"period_{p}_start"] = ts.time().toString("HH:mm")
-            d[f"period_{p}_end"]   = te.time().toString("HH:mm")
+            if p <= len(rows):
+                _, ts, te = rows[p - 1]
+                d[f"period_{p}_start"] = ts.toString("HH:mm")
+                d[f"period_{p}_end"] = te.toString("HH:mm")
         db.save_settings_bulk(d)
-        QMessageBox.information(self, "Thành công", "Đã lưu cài đặt.")
-        self.accept()
+        self.save_msg.setText("Đã lưu OK, đang đóng...")
+        QTimer.singleShot(450, self.accept)
 
 
 class AttendanceDetailDialog(QDialog):
@@ -1445,11 +1493,12 @@ class AdminLoginDialog(QDialog):
 
 
 class AttendanceQuickEditDialog(QDialog):
-    def __init__(self, parent, student, tdate, period):
+    def __init__(self, parent, student, tdate, period, total_periods=1):
         super().__init__(parent)
         self.status = None
+        self.period = int(period or 1)
         self.setWindowTitle("Sửa điểm danh")
-        self.setFixedSize(520, 320)
+        self.setFixedSize(540, 380)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setStyleSheet(QSS + f"QDialog {{ background-color: {C['bg']}; }}")
 
@@ -1457,10 +1506,23 @@ class AttendanceQuickEditDialog(QDialog):
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(16)
         root.addWidget(make_label("Chọn trạng thái điểm danh", 18, True, C['accent']))
-        info = QLabel(f"{student['student_id']} - {student['name']}\nNgày {tdate}  |  Tiết {period}")
+        info = QLabel(f"{student['student_id']} - {student['name']}\nNgày {tdate}")
         info.setWordWrap(True)
         info.setStyleSheet(f"color: {C['text']}; font-size: 14px;")
         root.addWidget(info)
+
+        period_row = QHBoxLayout()
+        period_row.addWidget(make_label("Sửa tiết:", 13, False, C['text_dim']))
+        self.period_combo = QComboBox()
+        self.period_combo.setMinimumHeight(42)
+        for p in range(1, int(total_periods or 1) + 1):
+            self.period_combo.addItem(f"Tiết {p}", p)
+        idx = self.period_combo.findData(self.period)
+        if idx >= 0:
+            self.period_combo.setCurrentIndex(idx)
+        self.period_combo.currentIndexChanged.connect(lambda _: setattr(self, "period", self.period_combo.currentData() or 1))
+        period_row.addWidget(self.period_combo, 1)
+        root.addLayout(period_row)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
@@ -1773,11 +1835,6 @@ class MainWindow(QMainWindow):
         btn_pick_overview_date.setMinimumSize(76, 40)
         btn_pick_overview_date.clicked.connect(self._pick_overview_date)
         top.addWidget(btn_pick_overview_date)
-        top.addWidget(make_label("Tiết:", 11, False, C['text_dim']))
-        self.overview_period = QComboBox()
-        self.overview_period.setMinimumSize(105, 40)
-        self.overview_period.currentIndexChanged.connect(lambda _: self._refresh_overview_table())
-        top.addWidget(self.overview_period)
         rec_lay.addLayout(top)
 
         self.overview_table = QTableWidget(0, 5)
@@ -2272,7 +2329,7 @@ class MainWindow(QMainWindow):
     def _sync_period_combo(self):
         s = db.get_all_settings()
         total = int(s.get("total_periods", 3))
-        for combo_name in ("period_combo", "overview_period"):
+        for combo_name in ("period_combo",):
             if not hasattr(self, combo_name):
                 continue
             combo = getattr(self, combo_name)
@@ -2350,9 +2407,9 @@ class MainWindow(QMainWindow):
             self.dash_summary.setText("")
             self.dash_progress.setValue(0)
 
-    def _overview_selection(self, sid, create=False):
+    def _overview_selection(self, sid, period=None, create=False):
         tdate = self.overview_date_value.toString("yyyy-MM-dd")
-        period = self.overview_period.currentData() or 1
+        period = int(period or 1)
         student = db.get_student(sid)
         sess = db.get_or_create_session(tdate, period) if create else None
         if not sess:
@@ -2362,23 +2419,45 @@ class MainWindow(QMainWindow):
                     break
         return student, sess, tdate, period
 
+    def _overview_day_status(self, sid, sessions, total_periods):
+        present_like = 0
+        half_like = 0
+        excused = 0
+        scanning = False
+        for sess in sessions:
+            att = db.get_attendance_detail(sid, sess["id"])
+            status = (att or {}).get("status")
+            if status == "present":
+                present_like += 1
+            elif status == "half":
+                half_like += 1
+            elif status == "excused":
+                excused += 1
+            elif status == "scanning":
+                scanning = True
+        if scanning:
+            return "...", "scanning"
+        if present_like:
+            return f"{present_like}/{total_periods} có mặt", "present"
+        if half_like:
+            return f"{half_like}/{total_periods} 1/2", "half"
+        if excused:
+            return f"{excused}/{total_periods} có phép", "excused"
+        return "0 có mặt", "absent"
+
     def _refresh_overview_table(self):
         if not hasattr(self, "overview_table"):
             return
         tdate = self.overview_date_value.toString("yyyy-MM-dd")
-        period = self.overview_period.currentData() or 1
-        sess = next((s for s in db.get_sessions_by_date(tdate) if s["period"] == period), None)
-        att_map = {}
-        if sess:
-            att_map = {a["student_id"]: a for a in db.get_attendance_by_session(sess["id"])}
+        settings = db.get_all_settings()
+        total_periods = int(settings.get("total_periods", 3))
+        sessions = db.get_sessions_by_date(tdate)
 
-        labels = {"present": "Có mặt", "absent": "Vắng", "half": "1/2", "excused": "Có phép", "scanning": "..."}
         colors = {"present": C['green'], "absent": C['red'], "half": C['yellow'], "excused": C['text_mid'], "scanning": C['accent']}
         self.overview_table.setRowCount(0)
         for sv in db.get_all_students():
             sid = sv["student_id"]
-            att = att_map.get(sid)
-            stat = att["status"] if att else "absent"
+            status_text, stat = self._overview_day_status(sid, sessions, total_periods)
             row = self.overview_table.rowCount()
             self.overview_table.insertRow(row)
             self.overview_table.setRowHeight(row, 64)
@@ -2388,7 +2467,7 @@ class MainWindow(QMainWindow):
             name_it = QTableWidgetItem(sv["name"])
             name_it.setData(Qt.ItemDataRole.UserRole, sid)
             self.overview_table.setItem(row, 1, name_it)
-            st_it = QTableWidgetItem(labels.get(stat, stat))
+            st_it = QTableWidgetItem(status_text)
             st_it.setForeground(QColor(colors.get(stat, C['text_dim'])))
             st_it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             st_it.setData(Qt.ItemDataRole.UserRole, sid)
@@ -2448,11 +2527,18 @@ class MainWindow(QMainWindow):
     def _edit_overview_attendance(self, sid):
         if not self._ensure_admin():
             return
-        student, sess, tdate, period = self._overview_selection(sid, create=True)
-        if not student or not sess:
+        tdate = self.overview_date_value.toString("yyyy-MM-dd")
+        student = db.get_student(sid)
+        if not student:
             return
-        dlg = AttendanceQuickEditDialog(self, student, tdate, period)
+        settings = db.get_all_settings()
+        total_periods = int(settings.get("total_periods", 3))
+        dlg = AttendanceQuickEditDialog(self, student, tdate, 1, total_periods)
         if not dlg.exec() or not dlg.status:
+            return
+        period = dlg.period
+        student, sess, tdate, period = self._overview_selection(sid, period=period, create=True)
+        if not student or not sess:
             return
         status = dlg.status
         att = db.get_attendance_detail(sid, sess["id"])
@@ -2464,13 +2550,22 @@ class MainWindow(QMainWindow):
         self._refresh_dashboard()
 
     def _open_overview_detail(self, sid):
-        student, sess, tdate, period = self._overview_selection(sid, create=False)
+        student = db.get_student(sid)
+        tdate = self.overview_date_value.toString("yyyy-MM-dd")
         if not student:
             return
+        sessions = db.get_sessions_by_date(tdate)
+        sess = None
+        for candidate in sessions:
+            if db.get_attendance_detail(sid, candidate["id"]):
+                sess = candidate
+                break
+        if not sess and sessions:
+            sess = sessions[0]
         if not sess:
             QMessageBox.information(
                 self, "Chưa có dữ liệu",
-                f"{student['student_id']} - {student['name']}\nNgày {tdate}, Tiết {period}: Vắng / chưa có mốc ra vào."
+                f"{student['student_id']} - {student['name']}\nNgày {tdate}: vắng / chưa có mốc ra vào."
             )
             return
         dlg = AttendanceDetailDialog(self, student, sess["id"], editable=False)
@@ -3092,10 +3187,14 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self):
         dlg = SettingsDialog(self)
-        dlg.exec()
+        saved = dlg.exec() == QDialog.DialogCode.Accepted
         self._sync_period_combo()
         self._sync_time_state()
         self._refresh_settings_display()
+        self._refresh_overview_table()
+        if saved:
+            self.statusBar().showMessage("Đã lưu cài đặt.", 3000)
+            self._switch_page(0)
 
     def _refresh_settings_display(self):
         s   = db.get_all_settings()
