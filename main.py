@@ -3124,7 +3124,12 @@ def main():
     app.setStyleSheet(QSS)
 
     win = MainWindow()
-    win.showFullScreen()
+    screen = QApplication.primaryScreen()
+    if screen:
+        win.setGeometry(screen.availableGeometry())
+    win.showMaximized()
+    win.raise_()
+    win.activateWindow()
     sys.exit(app.exec())
 
 
