@@ -2370,6 +2370,19 @@ class MainWindow(QMainWindow):
         btn_prev.clicked.connect(self._preview_attendance)
         dl.addWidget(btn_prev)
 
+        out_row = QHBoxLayout()
+        out_row.setSpacing(8)
+        btn_export_day = QPushButton("Xuất ngày...")
+        apply_button_variant(btn_export_day, "success")
+        btn_export_day.setMinimumHeight(42)
+        btn_export_day.clicked.connect(lambda: self._choose_export_format("day"))
+        btn_output = QPushButton("Mở output")
+        btn_output.setMinimumHeight(42)
+        btn_output.clicked.connect(self._open_output_folder)
+        out_row.addWidget(btn_export_day)
+        out_row.addWidget(btn_output)
+        dl.addLayout(out_row)
+
         self.btn_report_edit = QPushButton("Bật chỉnh sửa")
         self.btn_report_edit.setMinimumHeight(42)
         self.btn_report_edit.clicked.connect(self._toggle_report_edit)
@@ -2388,6 +2401,10 @@ class MainWindow(QMainWindow):
         db_row.addWidget(btn_xlsx)
         db_row.addWidget(btn_pdf)
         dl.addLayout(db_row)
+
+        self.export_msg = make_label("Output: thư mục du_lieu_output trên Desktop", 11, False, C['text_dim'])
+        self.export_msg.setWordWrap(True)
+        dl.addWidget(self.export_msg)
 
         self.prev_table = QTableWidget(0, 5)
         self.prev_table.setHorizontalHeaderLabels(["Mã SV", "Họ tên", "Tiết 1", "Tiết 2", "Tiết 3"])
@@ -2428,6 +2445,12 @@ class MainWindow(QMainWindow):
         self.year_spin.valueChanged.connect(self._set_report_year)
         mf.addWidget(self.year_spin, 1, 1)
         ml.addLayout(mf)
+
+        btn_export_month = QPushButton("Xuất tháng...")
+        apply_button_variant(btn_export_month, "success")
+        btn_export_month.setMinimumHeight(44)
+        btn_export_month.clicked.connect(lambda: self._choose_export_format("month"))
+        ml.addWidget(btn_export_month)
 
         btn_mxlsx = QPushButton("Xuất Excel tháng")
         btn_mxlsx.setObjectName("primary")
@@ -3365,6 +3388,47 @@ class MainWindow(QMainWindow):
             self._preview_attendance()
             self._refresh_dashboard()
 
+    def _choose_export_format(self, scope):
+        box = QMessageBox(self)
+        box.setWindowTitle("Chọn định dạng xuất")
+        box.setText("Bạn muốn xuất file dạng nào?")
+        excel_btn = box.addButton("Excel", QMessageBox.ButtonRole.AcceptRole)
+        pdf_btn = box.addButton("PDF", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Hủy", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == excel_btn:
+            fmt = "xlsx"
+        elif clicked == pdf_btn:
+            fmt = "pdf"
+        else:
+            return
+        if scope == "month":
+            self._export_month(fmt)
+        else:
+            self._export_day(fmt)
+
+    def _set_export_message(self, text, ok=True):
+        if hasattr(self, "export_msg"):
+            self.export_msg.setText(text)
+            self.export_msg.setStyleSheet(f"color: {C['green'] if ok else C['red']}; font-size: 11px;")
+        self.statusBar().showMessage(text, 5000)
+
+    def _show_export_success(self, msg, fp):
+        self._set_export_message(f"Đã xuất: {fp}")
+        box = QMessageBox(self)
+        box.setWindowTitle("Xuất thành công")
+        box.setText(f"{msg}\n\nFile: {fp}")
+        open_file = box.addButton("Mở file", QMessageBox.ButtonRole.AcceptRole)
+        open_folder = box.addButton("Mở output", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("Đóng", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == open_file:
+            self._open_file(fp)
+        elif clicked == open_folder:
+            self._open_output_folder()
+
     def _export_day(self, fmt):
         tdate = self._selected_export_date()
         if not tdate:
@@ -3375,14 +3439,9 @@ class MainWindow(QMainWindow):
         else:
             fp, msg = em.export_by_date(tdate)
         if fp:
-            r = QMessageBox.information(
-                self, "Xuất thành công",
-                f"{msg}\n\nFile: {fp}\n\nMở file không?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if r == QMessageBox.StandardButton.Yes:
-                self._open_file(fp)
+            self._show_export_success(msg, fp)
         else:
+            self._set_export_message(msg, ok=False)
             QMessageBox.warning(self, "Lỗi xuất", msg)
 
     def _export_month(self, fmt):
@@ -3393,9 +3452,14 @@ class MainWindow(QMainWindow):
         else:
             fp, msg = em.export_monthly_report(y, m)
         if fp:
-            QMessageBox.information(self, "Xuất thành công", f"{msg}\n\nFile: {fp}")
+            self._show_export_success(msg, fp)
         else:
+            self._set_export_message(msg, ok=False)
             QMessageBox.warning(self, "Lỗi xuất", msg)
+
+    def _open_output_folder(self):
+        os.makedirs(em.EXPORT_DIR, exist_ok=True)
+        self._open_file(em.EXPORT_DIR)
 
     def _open_file(self, fp):
         if sys.platform.startswith("win"):

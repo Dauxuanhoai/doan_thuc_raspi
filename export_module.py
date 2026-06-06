@@ -9,7 +9,14 @@ from datetime import datetime, date
 from PIL import Image, ImageDraw, ImageFont
 import database as db
 
-EXPORT_DIR = os.path.join(os.path.dirname(__file__), "exports")
+def _default_export_dir():
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    if os.path.isdir(desktop):
+        return os.path.join(desktop, "du_lieu_output")
+    return os.path.join(os.path.dirname(__file__), "exports")
+
+
+EXPORT_DIR = _default_export_dir()
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 
@@ -43,14 +50,11 @@ def export_by_date(target_date: str) -> str:
     class_name = settings.get("class_name", "Lớp học")
     total_periods = int(settings.get("total_periods", 3))
 
-    sessions = db.get_sessions_by_date(target_date)
-    if not sessions:
-        return None, "Không có buổi học nào trong ngày này"
-
     students = db.get_all_students()
     if not students:
         return None, "Chưa có sinh viên nào"
 
+    sessions = db.get_sessions_by_date(target_date)
     # Map session_id by period
     session_map = {s["period"]: s for s in sessions}
 
@@ -112,7 +116,7 @@ def export_by_date(target_date: str) -> str:
                 att = next((a for a in att_list if a["student_id"] == sid), None)
                 status = att["status"] if att else "absent"
             else:
-                status = "-"
+                status = "absent"
             data_row.append(STATUS_VI.get(status, "-"))
             if status == "present":
                 present_cnt += 1
@@ -400,13 +404,11 @@ def export_by_date_pdf(target_date: str):
     settings = db.get_all_settings()
     class_name = settings.get("class_name", "Lớp học")
     total_periods = int(settings.get("total_periods", 3))
-    sessions = db.get_sessions_by_date(target_date)
-    if not sessions:
-        return None, "Không có buổi học nào trong ngày này"
     students = db.get_all_students()
     if not students:
         return None, "Chưa có sinh viên nào"
 
+    sessions = db.get_sessions_by_date(target_date)
     session_map = {s["period"]: s for s in sessions}
     headers = ["STT", "Mã SV", "Họ và Tên"] + [f"Tiết {p}" for p in range(1, total_periods + 1)] + ["Tỉ lệ"]
     rows = []
@@ -416,7 +418,7 @@ def export_by_date_pdf(target_date: str):
         score = 0
         for p in range(1, total_periods + 1):
             sess = session_map.get(p)
-            status = "-"
+            status = "absent"
             if sess:
                 att_list = db.get_attendance_by_session(sess["id"])
                 att = next((a for a in att_list if a["student_id"] == sid), None)
