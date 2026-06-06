@@ -1498,7 +1498,7 @@ class AttendanceQuickEditDialog(QDialog):
         self.status = None
         self.period = int(period or 1)
         self.setWindowTitle("Sửa điểm danh")
-        self.setFixedSize(540, 380)
+        self.setFixedSize(560, 420)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setStyleSheet(QSS + f"QDialog {{ background-color: {C['bg']}; }}")
 
@@ -1511,18 +1511,19 @@ class AttendanceQuickEditDialog(QDialog):
         info.setStyleSheet(f"color: {C['text']}; font-size: 14px;")
         root.addWidget(info)
 
-        period_row = QHBoxLayout()
-        period_row.addWidget(make_label("Sửa tiết:", 13, False, C['text_dim']))
-        self.period_combo = QComboBox()
-        self.period_combo.setMinimumHeight(42)
+        root.addWidget(make_label("Sửa tiết:", 13, False, C['text_dim']))
+        self.period_buttons = []
+        period_grid = QGridLayout()
+        period_grid.setSpacing(8)
         for p in range(1, int(total_periods or 1) + 1):
-            self.period_combo.addItem(f"Tiết {p}", p)
-        idx = self.period_combo.findData(self.period)
-        if idx >= 0:
-            self.period_combo.setCurrentIndex(idx)
-        self.period_combo.currentIndexChanged.connect(lambda _: setattr(self, "period", self.period_combo.currentData() or 1))
-        period_row.addWidget(self.period_combo, 1)
-        root.addLayout(period_row)
+            btn = QPushButton(f"Tiết {p}")
+            btn.setCheckable(True)
+            btn.setMinimumSize(112, 44)
+            btn.clicked.connect(lambda _, x=p: self._choose_period(x))
+            self.period_buttons.append((p, btn))
+            period_grid.addWidget(btn, (p - 1) // 3, (p - 1) % 3)
+        root.addLayout(period_grid)
+        self._choose_period(self.period)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
@@ -1552,6 +1553,16 @@ class AttendanceQuickEditDialog(QDialog):
     def _choose(self, status):
         self.status = status
         self.accept()
+
+    def _choose_period(self, period):
+        self.period = int(period or 1)
+        for p, btn in self.period_buttons:
+            active = p == self.period
+            btn.setChecked(active)
+            if active:
+                btn.setStyleSheet(f"background-color: {C['accent']}; color: {C['bg']}; border: 1px solid {C['accent']}; border-radius: 8px; font-weight: 800;")
+            else:
+                btn.setStyleSheet(f"background-color: {C['surface2']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 8px; font-weight: 700;")
 
 
 class DatePickDialog(QDialog):
@@ -1637,6 +1648,63 @@ class MonthPickDialog(QDialog):
         self.accept()
 
 
+class PeriodButtonPicker(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._items = []
+        self._current = -1
+        self._signals_blocked = False
+        self.lay = QHBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.lay.setSpacing(6)
+
+    def clear(self):
+        while self.lay.count():
+            item = self.lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self._items = []
+        self._current = -1
+
+    def addItem(self, text, data):
+        idx = len(self._items)
+        btn = QPushButton(text)
+        btn.setMinimumSize(78, 42)
+        btn.clicked.connect(lambda _, i=idx: self.setCurrentIndex(i))
+        self._items.append((text, data, btn))
+        self.lay.addWidget(btn)
+        if self._current < 0:
+            self.setCurrentIndex(0)
+
+    def currentData(self):
+        if 0 <= self._current < len(self._items):
+            return self._items[self._current][1]
+        return None
+
+    def findData(self, data):
+        for i, (_, item_data, _) in enumerate(self._items):
+            if item_data == data:
+                return i
+        return -1
+
+    def setCurrentIndex(self, idx):
+        if not (0 <= idx < len(self._items)):
+            return
+        self._current = idx
+        self._refresh_buttons()
+
+    def blockSignals(self, blocked):
+        self._signals_blocked = bool(blocked)
+
+    def _refresh_buttons(self):
+        for i, (_, _, btn) in enumerate(self._items):
+            if i == self._current:
+                btn.setStyleSheet(f"background-color: {C['accent']}; color: {C['bg']}; border: 1px solid {C['accent']}; border-radius: 8px; font-weight: 800;")
+            else:
+                btn.setStyleSheet(f"background-color: {C['surface2']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 8px; font-weight: 700;")
+
+
 # ─── Main Window ──────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -1650,7 +1718,7 @@ class MainWindow(QMainWindow):
         scr = QApplication.primaryScreen()
         if scr:
             geo = scr.availableGeometry()
-            self.resize(min(1280, geo.width()), min(800, geo.height()))
+            self.resize(min(1180, max(900, geo.width() - 120)), min(720, max(520, geo.height() - 140)))
 
         self.setStyleSheet(QSS)
 
@@ -1926,10 +1994,9 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(self.date_combo)
 
         ctrl.addWidget(make_label("Tiết:", 12))
-        self.period_combo = QComboBox()
+        self.period_combo = PeriodButtonPicker()
         for i in range(1, 4):
             self.period_combo.addItem(f"Tiết {i}", i)
-        self.period_combo.setMinimumWidth(90)
         ctrl.addWidget(self.period_combo)
 
         self.btn_session = QPushButton("▶  Bắt đầu")
@@ -3348,10 +3415,13 @@ def main():
     screen = QApplication.primaryScreen()
     if screen:
         geo = screen.availableGeometry()
-        win.setGeometry(geo.x() + 24, geo.y() + 24, max(900, geo.width() - 48), max(520, geo.height() - 64))
+        w = min(1180, max(900, geo.width() - 120))
+        h = min(720, max(520, geo.height() - 160))
+        x = geo.x() + max(40, (geo.width() - w) // 2)
+        y = geo.y() + 80
+        win.setGeometry(x, y, w, h)
     win.showNormal()
     win.raise_()
-    win.activateWindow()
     sys.exit(app.exec())
 
 
