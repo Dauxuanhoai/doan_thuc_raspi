@@ -404,11 +404,11 @@ class LcdUi:
         d.text((350, 18), datetime.now().strftime("%H:%M:%S"), fill=(235, 245, 250), font=self.font)
 
     def render_home(self, d):
-        self.header(d, "Classroom Panel")
+        self.header(d, "Classroom LCD")
         state = self.app_state()
         if not state["running"]:
             app = "APP OFF"
-            line = "Tap START to open app and begin"
+            line = "Cham START de mo ung dung"
             action_label = "START APP"
             action = "start"
             action_fill = (18, 88, 54)
@@ -416,44 +416,50 @@ class LcdUi:
         elif state.get("session_active"):
             app = "ATTENDANCE ON" if state.get("attendance_active") else "LIVE PREVIEW"
             period = state.get("period") or "-"
-            line = f"Period {period} is running" if state.get("attendance_active") else "Camera on, no attendance"
-            action_label = "STOP APP"
+            line = f"Dang diem danh tiet {period}" if state.get("attendance_active") else "Camera dang bat"
+            action_label = "STOP"
             action = "stop"
             action_fill = (100, 28, 38)
             app_color = (0, 230, 118)
         else:
             app = "APP READY"
-            line = "Tap START to begin attendance"
-            action_label = "START APP"
+            line = "San sang bat dau diem danh"
+            action_label = "START"
             action = "start"
             action_fill = (18, 88, 54)
             app_color = (255, 214, 0)
 
-        d.rounded_rectangle((12, 64, 468, 146), radius=8, fill=(18, 32, 48), outline=(58, 88, 116), width=2)
-        d.text((24, 74), app, fill=app_color, font=self.font_mid)
-        d.text((24, 105), line[:36], fill=(235, 245, 250), font=self.font)
         ssid, ip, connected = self.wifi_status()
-        wifi_line = f"{'ONLINE' if connected else 'OFFLINE'}  {ssid[:18]}  IP: {ip}"
-        d.text((24, 126), wifi_line[:48], fill=(255, 214, 0), font=self.font_small)
+        wifi_color = (0, 230, 118) if connected else (255, 214, 0)
 
-        self.button(d, (14, 154, 466, 220), action_label, action, fill=action_fill)
-        self.button(d, (14, 252, 226, 312), "WIFI", "wifi", fill=(25, 52, 82))
-        self.button(d, (254, 252, 466, 312), "REFRESH", "refresh")
+        d.rounded_rectangle((12, 64, 468, 142), radius=10, fill=(18, 32, 48), outline=(58, 88, 116), width=2)
+        d.text((26, 74), app, fill=app_color, font=self.font_mid)
+        d.text((26, 106), line[:34], fill=(235, 245, 250), font=self.font)
+
+        d.rounded_rectangle((12, 150, 468, 204), radius=10, fill=(14, 28, 42), outline=(58, 88, 116), width=2)
+        d.text((26, 160), "WiFi", fill=(127, 168, 201), font=self.font_small)
+        d.text((84, 158), ("ON " if connected else "OFF ") + ssid[:17], fill=wifi_color, font=self.font)
+        d.text((300, 162), ip[:15], fill=(235, 245, 250), font=self.font_small)
+
+        self.button(d, (14, 214, 224, 312), action_label, action, fill=action_fill)
+        self.button(d, (256, 214, 466, 262), "WIFI", "wifi", fill=(25, 52, 82))
+        self.button(d, (256, 268, 466, 312), "REFRESH", "refresh")
         if self.message:
-            d.text((18, 306), self.message[:44], fill=(255, 214, 0), font=self.font_small)
+            d.text((18, 206), self.message[:44], fill=(255, 214, 0), font=self.font_small)
 
     def render_wifi(self, d):
-        self.header(d, "WiFi Networks")
-        self.button(d, (365, 62, 468, 98), "BACK", "home")
-        self.button(d, (250, 62, 354, 98), "SCAN", "scan")
+        self.header(d, "WiFi")
+        self.button(d, (360, 62, 468, 98), "BACK", "home")
+        self.button(d, (248, 62, 350, 98), "SCAN", "scan")
         ssid_now, ip_now, connected = self.wifi_status()
         if connected:
-            self.button(d, (135, 62, 238, 98), "OFF", "disconnect", fill=(100, 28, 38))
-        status = f"{self.wifi_iface}  {'ON' if connected else 'OFF'}: {ssid_now[:18]}  {ip_now}"
-        d.text((14, 102), status[:52], fill=(0, 230, 118) if connected else (255, 214, 0), font=self.font_small)
+            self.button(d, (136, 62, 238, 98), "OFF", "disconnect", fill=(100, 28, 38))
+        status = f"{'ONLINE' if connected else 'OFFLINE'}  {ssid_now[:18]}  {ip_now}"
+        d.rounded_rectangle((12, 104, 468, 138), radius=8, fill=(14, 28, 42), outline=(58, 88, 116), width=1)
+        d.text((24, 111), status[:48], fill=(0, 230, 118) if connected else (255, 214, 0), font=self.font_small)
         if (not self.networks or time.time() - self.last_scan > 60) and not self.scanning_wifi:
             self.scan_wifi()
-        y = 124
+        y = 146
         for i, net in enumerate(self.networks[:5]):
             ssid = net["ssid"][:20]
             sig = net["signal"]
@@ -466,8 +472,8 @@ class LcdUi:
             else:
                 mark = "LOCK" if net["security"] else "OPEN"
                 fill = (18, 32, 48)
-            self.button(d, (12, y, 468, y + 34), f"{mark}  {ssid}  {sig}%", ("net", i), fill=fill)
-            y += 38
+            self.button(d, (12, y, 468, y + 38), f"{mark}  {ssid}  {sig}%", ("net", i), fill=fill)
+            y += 42
         if self.message:
             d.text((14, 302), self.message[:58], fill=(255, 214, 0), font=self.font_small)
 

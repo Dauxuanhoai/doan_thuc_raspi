@@ -1444,6 +1444,54 @@ class AdminLoginDialog(QDialog):
             self.msg.setText("Sai user hoặc mật khẩu.")
 
 
+class AttendanceQuickEditDialog(QDialog):
+    def __init__(self, parent, student, tdate, period):
+        super().__init__(parent)
+        self.status = None
+        self.setWindowTitle("Sửa điểm danh")
+        self.setFixedSize(520, 320)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setStyleSheet(QSS + f"QDialog {{ background-color: {C['bg']}; }}")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.setSpacing(16)
+        root.addWidget(make_label("Chọn trạng thái điểm danh", 18, True, C['accent']))
+        info = QLabel(f"{student['student_id']} - {student['name']}\nNgày {tdate}  |  Tiết {period}")
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color: {C['text']}; font-size: 14px;")
+        root.addWidget(info)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
+        for text, status, variant in [
+            ("Vắng", "absent", "danger"),
+            ("Có mặt", "present", "success"),
+            ("1/2 buổi", "half", "warning"),
+        ]:
+            btn = QPushButton(text)
+            btn.setMinimumSize(140, 70)
+            if variant in ("success", "danger"):
+                apply_button_variant(btn, variant)
+            else:
+                btn.setObjectName("warning")
+            btn.clicked.connect(lambda _, s=status: self._choose(s))
+            btn_row.addWidget(btn)
+        root.addLayout(btn_row)
+
+        bottom = QHBoxLayout()
+        bottom.addStretch()
+        cancel = QPushButton("Hủy")
+        cancel.setMinimumSize(120, 44)
+        cancel.clicked.connect(self.reject)
+        bottom.addWidget(cancel)
+        root.addLayout(bottom)
+
+    def _choose(self, status):
+        self.status = status
+        self.accept()
+
+
 # ─── Main Window ──────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -2300,22 +2348,10 @@ class MainWindow(QMainWindow):
         student, sess, tdate, period = self._overview_selection(sid, create=True)
         if not student or not sess:
             return
-        box = QMessageBox(self)
-        box.setWindowTitle("Sửa điểm danh")
-        box.setText(f"{student['student_id']} - {student['name']}\nNgày {tdate}, Tiết {period}")
-        btn_abs = box.addButton("Vắng", QMessageBox.ButtonRole.AcceptRole)
-        btn_pre = box.addButton("Có mặt", QMessageBox.ButtonRole.AcceptRole)
-        btn_half = box.addButton("1/2 buổi", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("Hủy", QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked not in (btn_abs, btn_pre, btn_half):
+        dlg = AttendanceQuickEditDialog(self, student, tdate, period)
+        if not dlg.exec() or not dlg.status:
             return
-        status = "absent"
-        if clicked == btn_pre:
-            status = "present"
-        elif clicked == btn_half:
-            status = "half"
+        status = dlg.status
         att = db.get_attendance_detail(sid, sess["id"])
         check_in = (att or {}).get("check_in_time") or ("00:00:00" if status == "present" else None)
         last_seen = (att or {}).get("last_seen_time") or check_in
@@ -3088,7 +3124,7 @@ def main():
     app.setStyleSheet(QSS)
 
     win = MainWindow()
-    win.showMaximized()
+    win.showFullScreen()
     sys.exit(app.exec())
 
 
