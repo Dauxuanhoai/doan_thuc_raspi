@@ -1438,6 +1438,106 @@ class AttendanceDetailDialog(QDialog):
         self.accept()
 
 
+class ReportAttendanceEditDialog(QDialog):
+    STATUS_CHOICES = [
+        ("absent", "Vắng", "danger"),
+        ("present", "Có mặt", "success"),
+        ("half", "1/2", "warning"),
+        ("excused", "Có phép", "muted"),
+    ]
+
+    def __init__(self, parent, student, tdate, total_periods, editable=False):
+        super().__init__(parent)
+        self.student = student
+        self.tdate = tdate
+        self.total_periods = int(total_periods or 1)
+        self.editable = editable
+        self.values = {}
+        self.buttons = {}
+        self.setWindowTitle(f"Dữ liệu điểm danh - {student['student_id']}")
+        self.setMinimumSize(620, 420)
+        self.setStyleSheet(QSS + f"QDialog {{ background-color: {C['bg']}; }}")
+        self._build()
+        self._load()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(12)
+        root.addWidget(make_label(f"{self.student['student_id']} - {self.student['name']}", 17, True, C['accent']))
+        mode = "Đang bật chỉnh sửa" if self.editable else "Chỉ xem - bật chỉnh sửa ở tab Báo cáo để lưu dữ liệu"
+        root.addWidget(make_label(f"Ngày {self.tdate}  |  {mode}", 12, False, C['text_dim']))
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(10)
+        grid.addWidget(make_label("Tiết", 12, True, C['text_dim']), 0, 0)
+        for idx, (_, label, _) in enumerate(self.STATUS_CHOICES, start=1):
+            grid.addWidget(make_label(label, 12, True, C['text_dim'], Qt.AlignmentFlag.AlignCenter), 0, idx)
+        for p in range(1, self.total_periods + 1):
+            grid.addWidget(make_label(f"Tiết {p}", 13, True, C['text']), p, 0)
+            self.buttons[p] = {}
+            for c, (status, label, _) in enumerate(self.STATUS_CHOICES, start=1):
+                btn = QPushButton(label)
+                btn.setCheckable(True)
+                btn.setMinimumSize(104, 42)
+                btn.setEnabled(self.editable)
+                btn.clicked.connect(lambda _, period=p, st=status: self._set_period_status(period, st))
+                self.buttons[p][status] = btn
+                grid.addWidget(btn, p, c)
+        root.addLayout(grid)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        close = QPushButton("Đóng")
+        close.setMinimumSize(110, 42)
+        close.clicked.connect(self.reject)
+        btns.addWidget(close)
+        if self.editable:
+            save = QPushButton("Lưu dữ liệu")
+            apply_button_variant(save, "success")
+            save.setMinimumSize(150, 42)
+            save.clicked.connect(self._save)
+            btns.addWidget(save)
+        root.addLayout(btns)
+
+    def _load(self):
+        sessions = db.get_sessions_by_date(self.tdate)
+        sess_map = {s["period"]: s for s in sessions}
+        for p in range(1, self.total_periods + 1):
+            status = "absent"
+            sess = sess_map.get(p)
+            if sess:
+                att = db.get_attendance_detail(self.student["student_id"], sess["id"])
+                status = (att or {}).get("status") or "absent"
+            self._set_period_status(p, status)
+
+    def _set_period_status(self, period, status):
+        self.values[int(period)] = status
+        for st, btn in self.buttons[int(period)].items():
+            active = st == status
+            btn.setChecked(active)
+            color = {
+                "present": C['green'],
+                "absent": C['red'],
+                "half": C['yellow'],
+                "excused": C['text_mid'],
+            }.get(st, C['text_dim'])
+            if active:
+                btn.setStyleSheet(f"background-color: {color}; color: {C['bg']}; border: 1px solid {color}; border-radius: 8px; font-weight: 800;")
+            else:
+                btn.setStyleSheet(f"background-color: {C['surface2']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 8px; font-weight: 700;")
+
+    def _save(self):
+        for period, status in self.values.items():
+            sess = db.get_or_create_session(self.tdate, period)
+            old = db.get_attendance_detail(self.student["student_id"], sess["id"])
+            check_in = (old or {}).get("check_in_time") or ("00:00:00" if status == "present" else None)
+            last_seen = (old or {}).get("last_seen_time") or check_in
+            db.update_attendance_detail(self.student["student_id"], sess["id"], status, check_in, last_seen)
+        self.accept()
+
+
 class AdminLoginDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1490,6 +1590,45 @@ class AdminLoginDialog(QDialog):
             self.accept()
         else:
             self.msg.setText("Sai user hoặc mật khẩu.")
+
+
+class ReportEditUnlockDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.ok = False
+        self.setWindowTitle("Bật chỉnh sửa dữ liệu")
+        self.setFixedSize(420, 220)
+        self.setStyleSheet(QSS + f"QDialog {{ background-color: {C['bg']}; }}")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.setSpacing(12)
+        root.addWidget(make_label("Nhập mật khẩu để chỉnh sửa", 16, True, C['accent']))
+        self.pass_edit = QLineEdit()
+        self.pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pass_edit.setPlaceholderText("Mật khẩu")
+        self.pass_edit.returnPressed.connect(self._unlock)
+        root.addWidget(self.pass_edit)
+        self.msg = make_label("", 11, False, C['red'])
+        root.addWidget(self.msg)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        cancel = QPushButton("Hủy")
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton("Bật sửa")
+        apply_button_variant(ok, "primary")
+        ok.clicked.connect(self._unlock)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        root.addLayout(btns)
+
+    def _unlock(self):
+        if self.pass_edit.text() == "123456":
+            self.ok = True
+            self.accept()
+        else:
+            self.msg.setText("Sai mật khẩu.")
 
 
 class AttendanceQuickEditDialog(QDialog):
@@ -1734,6 +1873,7 @@ class MainWindow(QMainWindow):
         self._last_face_name    = ""
         self._last_face_ts      = 0.0
         self._admin_unlocked    = False
+        self._report_edit_unlocked = False
         self._lcd               = (
             lcd_status.LcdStatusDisplay()
             if lcd_status and os.environ.get("CLASSROOM_APP_LCD") == "1"
@@ -1905,21 +2045,21 @@ class MainWindow(QMainWindow):
         top.addWidget(btn_pick_overview_date)
         rec_lay.addLayout(top)
 
-        self.overview_table = QTableWidget(0, 5)
-        self.overview_table.setHorizontalHeaderLabels(["Mã SV", "Sinh viên", "Trạng thái", "Sửa", "Chi tiết"])
+        self.overview_table = QTableWidget(0, 4)
+        self.overview_table.setHorizontalHeaderLabels(["Mã SV", "Sinh viên", "Trạng thái", "Chi tiết"])
         h = self.overview_table.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         self.overview_table.setColumnWidth(2, 140)
-        self.overview_table.setColumnWidth(3, 110)
-        self.overview_table.setColumnWidth(4, 120)
+        self.overview_table.setColumnWidth(3, 120)
         self.overview_table.verticalHeader().setDefaultSectionSize(64)
         self.overview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.overview_table.verticalHeader().setVisible(False)
         self.overview_table.setAlternatingRowColors(True)
+        self.overview_table.cellDoubleClicked.connect(lambda row, _col: self._open_overview_detail_from_row(row))
         rec_lay.addWidget(self.overview_table)
         bottom.addWidget(rec_frame, 3)
 
@@ -2230,6 +2370,11 @@ class MainWindow(QMainWindow):
         btn_prev.clicked.connect(self._preview_attendance)
         dl.addWidget(btn_prev)
 
+        self.btn_report_edit = QPushButton("Bật chỉnh sửa")
+        self.btn_report_edit.setMinimumHeight(42)
+        self.btn_report_edit.clicked.connect(self._toggle_report_edit)
+        dl.addWidget(self.btn_report_edit)
+
         db_row = QHBoxLayout()
         db_row.setSpacing(8)
         btn_xlsx = QPushButton("Xuất Excel")
@@ -2249,6 +2394,8 @@ class MainWindow(QMainWindow):
         self.prev_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.prev_table.verticalHeader().setVisible(False)
         self.prev_table.setAlternatingRowColors(True)
+        self.prev_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.prev_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.prev_table.cellDoubleClicked.connect(self._open_report_attendance_detail)
         dl.addWidget(self.prev_table, 1)
         bl.addWidget(day_card, 3)
@@ -2416,6 +2563,8 @@ class MainWindow(QMainWindow):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _switch_page(self, idx):
+        if idx != 3:
+            self._lock_report_edit()
         self.stack.setCurrentIndex(idx)
         for i, btn in enumerate(self.nav_btns):
             btn.setObjectName("nav_active" if i == idx else "nav")
@@ -2540,28 +2689,6 @@ class MainWindow(QMainWindow):
             st_it.setData(Qt.ItemDataRole.UserRole, sid)
             self.overview_table.setItem(row, 2, st_it)
 
-            btn_edit = QPushButton("Sửa")
-            btn_edit.setFixedSize(82, 34)
-            btn_edit.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {C['surface2']};
-                    color: {C['text_mid']};
-                    border: 1px solid {C['border']};
-                    border-radius: 7px;
-                    padding: 3px 8px;
-                    font-weight: 700;
-                    min-height: 0px;
-                }}
-                QPushButton:hover {{ color: {C['accent']}; border-color: {C['accent']}; }}
-            """)
-            btn_edit.clicked.connect(lambda _, x=sid: self._edit_overview_attendance(x))
-            edit_w = QWidget()
-            edit_lay = QHBoxLayout(edit_w)
-            edit_lay.setContentsMargins(8, 4, 8, 4)
-            edit_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            edit_lay.addWidget(btn_edit)
-            self.overview_table.setCellWidget(row, 3, edit_w)
-
             btn_detail = QPushButton("Chi tiết")
             btn_detail.setFixedSize(92, 34)
             btn_detail.setStyleSheet(f"""
@@ -2582,7 +2709,7 @@ class MainWindow(QMainWindow):
             detail_lay.setContentsMargins(8, 4, 8, 4)
             detail_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
             detail_lay.addWidget(btn_detail)
-            self.overview_table.setCellWidget(row, 4, detail_w)
+            self.overview_table.setCellWidget(row, 3, detail_w)
 
     def _pick_overview_date(self):
         dlg = DatePickDialog(self, self.overview_date_value)
@@ -2590,6 +2717,12 @@ class MainWindow(QMainWindow):
             self.overview_date_value = dlg.selected
             self.overview_date.setText(self.overview_date_value.toString("yyyy-MM-dd"))
             self._refresh_overview_table()
+
+    def _open_overview_detail_from_row(self, row):
+        item = self.overview_table.item(row, 0)
+        sid = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if sid:
+            self._open_overview_detail(sid)
 
     def _edit_overview_attendance(self, sid):
         if not self._ensure_admin():
@@ -2964,7 +3097,7 @@ class MainWindow(QMainWindow):
         student = db.get_student(sid)
         if not student:
             return
-        dlg = AttendanceDetailDialog(self, student, self.current_session_id)
+        dlg = AttendanceDetailDialog(self, student, self.current_session_id, editable=False)
         if dlg.exec():
             self._refresh_att_table()
             self._refresh_dashboard()
@@ -3141,6 +3274,29 @@ class MainWindow(QMainWindow):
             self.month_display.setText(f"Tháng {self.report_month}")
             self.year_spin.setValue(self.report_year)
 
+    def _set_report_edit_state(self, enabled):
+        self._report_edit_unlocked = bool(enabled)
+        if hasattr(self, "btn_report_edit"):
+            if self._report_edit_unlocked:
+                self.btn_report_edit.setText("Đang bật chỉnh sửa")
+                apply_button_variant(self.btn_report_edit, "success")
+            else:
+                self.btn_report_edit.setText("Bật chỉnh sửa")
+                apply_button_variant(self.btn_report_edit, "primary")
+
+    def _lock_report_edit(self):
+        if getattr(self, "_report_edit_unlocked", False):
+            self._set_report_edit_state(False)
+
+    def _toggle_report_edit(self):
+        if self._report_edit_unlocked:
+            self._set_report_edit_state(False)
+            return
+        dlg = ReportEditUnlockDialog(self)
+        if dlg.exec() and dlg.ok:
+            self._set_report_edit_state(True)
+            self.statusBar().showMessage("Đã bật chỉnh sửa dữ liệu báo cáo.", 3000)
+
     def _preview_attendance(self):
         tdate = self._selected_export_date()
         if not tdate:
@@ -3174,8 +3330,8 @@ class MainWindow(QMainWindow):
                     )
                     stat = att["status"] if att else "absent"
                 else:
-                    stat = "—"
-                vi = {"present": "Có mặt", "absent": "Vắng", "half": "½", "excused": "Có phép", "—": "-"}
+                    stat = "absent"
+                vi = {"present": "Có mặt", "absent": "Vắng", "half": "½", "excused": "Có phép"}
                 it = QTableWidgetItem(vi.get(stat, stat))
                 it.setData(Qt.ItemDataRole.UserRole, {"sid": sv["student_id"], "date": tdate, "period": p})
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3190,20 +3346,21 @@ class MainWindow(QMainWindow):
         if not meta:
             return
         sid = meta.get("sid")
-        period = meta.get("period")
         tdate = meta.get("date") or self._selected_export_date()
         if not sid:
-            return
-        if period is None:
-            QMessageBox.information(self, "Chọn tiết", "Double-click vào ô Tiết để sửa điểm danh.")
-            return
-        if not self._ensure_admin():
             return
         student = db.get_student(sid)
         if not student:
             return
-        sess = db.get_or_create_session(tdate, period)
-        dlg = AttendanceDetailDialog(self, student, sess["id"])
+        settings = db.get_all_settings()
+        total_periods = int(settings.get("total_periods", 3))
+        dlg = ReportAttendanceEditDialog(
+            self,
+            student,
+            tdate,
+            total_periods,
+            editable=self._report_edit_unlocked,
+        )
         if dlg.exec():
             self._preview_attendance()
             self._refresh_dashboard()
