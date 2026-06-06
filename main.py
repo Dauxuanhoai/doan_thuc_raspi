@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
     QFormLayout, QTabWidget, QComboBox, QTimeEdit, QSpinBox, QDateEdit,
     QMessageBox, QFileDialog, QTableWidget, QTableWidgetItem,
     QHeaderView, QStackedWidget, QSizePolicy, QGridLayout,
-    QProgressBar, QTextEdit, QGroupBox, QStatusBar,
+    QProgressBar, QTextEdit, QGroupBox, QStatusBar, QCalendarWidget,
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QThread, pyqtSignal, QTime, QSize, QDate, QRect,
@@ -1492,6 +1492,89 @@ class AttendanceQuickEditDialog(QDialog):
         self.accept()
 
 
+class DatePickDialog(QDialog):
+    def __init__(self, parent=None, current=None):
+        super().__init__(parent)
+        self.selected = current or QDate.currentDate()
+        self.setWindowTitle("Chọn ngày")
+        self.setFixedSize(440, 420)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setStyleSheet(QSS + f"QDialog {{ background-color: {C['bg']}; }}")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(12)
+        self.cal = QCalendarWidget()
+        self.cal.setGridVisible(True)
+        self.cal.setSelectedDate(self.selected)
+        self.cal.clicked.connect(self._set_date)
+        root.addWidget(self.cal, 1)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        cancel = QPushButton("Hủy")
+        cancel.setMinimumSize(110, 42)
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton("Chọn ngày")
+        apply_button_variant(ok, "primary")
+        ok.setMinimumSize(150, 42)
+        ok.clicked.connect(self.accept)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        root.addLayout(btns)
+
+    def _set_date(self, qdate):
+        self.selected = qdate
+
+
+class MonthPickDialog(QDialog):
+    def __init__(self, parent=None, month=None, year=None):
+        super().__init__(parent)
+        now = datetime.now()
+        self.month = int(month or now.month)
+        self.year = int(year or now.year)
+        self.setWindowTitle("Chọn tháng")
+        self.setFixedSize(460, 380)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setStyleSheet(QSS + f"QDialog {{ background-color: {C['bg']}; }}")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(14)
+        root.addWidget(make_label("Chọn tháng báo cáo", 16, True, C['accent']))
+
+        year_row = QHBoxLayout()
+        year_row.addWidget(make_label("Năm:", 13, False, C['text_dim']))
+        self.year_spin2 = QSpinBox()
+        self.year_spin2.setRange(2020, 2035)
+        self.year_spin2.setValue(self.year)
+        self.year_spin2.setMinimumHeight(42)
+        self.year_spin2.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        year_row.addWidget(self.year_spin2)
+        root.addLayout(year_row)
+
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        for i in range(1, 13):
+            btn = QPushButton(f"Tháng {i}")
+            btn.setMinimumSize(96, 46)
+            if i == self.month:
+                apply_button_variant(btn, "primary")
+            btn.clicked.connect(lambda _, m=i: self._choose(m))
+            grid.addWidget(btn, (i - 1) // 3, (i - 1) % 3)
+        root.addLayout(grid)
+
+        cancel = QPushButton("Hủy")
+        cancel.setMinimumHeight(42)
+        cancel.clicked.connect(self.reject)
+        root.addWidget(cancel)
+
+    def _choose(self, month):
+        self.month = month
+        self.year = self.year_spin2.value()
+        self.accept()
+
+
 # ─── Main Window ──────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -1681,13 +1764,15 @@ class MainWindow(QMainWindow):
         top.addWidget(make_label("Tổng quan điểm danh", 13, True, C['accent']))
         top.addStretch()
         top.addWidget(make_label("Ngày:", 11, False, C['text_dim']))
-        self.overview_date = QDateEdit()
-        self.overview_date.setDisplayFormat("yyyy-MM-dd")
-        self.overview_date.setCalendarPopup(True)
-        self.overview_date.setMinimumSize(145, 40)
-        self.overview_date.setDate(QDate.currentDate())
-        self.overview_date.dateChanged.connect(lambda _: self._refresh_overview_table())
+        self.overview_date_value = QDate.currentDate()
+        self.overview_date = QLineEdit(self.overview_date_value.toString("yyyy-MM-dd"))
+        self.overview_date.setReadOnly(True)
+        self.overview_date.setMinimumSize(125, 40)
         top.addWidget(self.overview_date)
+        btn_pick_overview_date = QPushButton("Chọn")
+        btn_pick_overview_date.setMinimumSize(76, 40)
+        btn_pick_overview_date.clicked.connect(self._pick_overview_date)
+        top.addWidget(btn_pick_overview_date)
         top.addWidget(make_label("Tiết:", 11, False, C['text_dim']))
         self.overview_period = QComboBox()
         self.overview_period.setMinimumSize(105, 40)
@@ -2005,10 +2090,15 @@ class MainWindow(QMainWindow):
 
         df = QHBoxLayout()
         df.addWidget(make_label("Ngày:"))
-        self.export_date = QComboBox()
-        self.export_date.setEditable(True)
-        self._populate_export_dates()
+        self.export_date_value = QDate.currentDate()
+        self.export_date = QLineEdit(self.export_date_value.toString("yyyy-MM-dd"))
+        self.export_date.setReadOnly(True)
+        self.export_date.setMinimumHeight(42)
         df.addWidget(self.export_date)
+        btn_pick_export_date = QPushButton("Chọn ngày")
+        btn_pick_export_date.setMinimumHeight(42)
+        btn_pick_export_date.clicked.connect(self._pick_export_date)
+        df.addWidget(btn_pick_export_date)
         dl.addLayout(df)
 
         btn_prev = QPushButton("Xem trước dữ liệu")
@@ -2049,16 +2139,22 @@ class MainWindow(QMainWindow):
         mf = QGridLayout()
         mf.setSpacing(10)
         mf.addWidget(make_label("Tháng:"), 0, 0)
-        self.month_combo = QComboBox()
-        for m in range(1, 13):
-            self.month_combo.addItem(f"Tháng {m}", m)
-        self.month_combo.setCurrentIndex(datetime.now().month - 1)
-        mf.addWidget(self.month_combo, 0, 1)
+        self.report_month = datetime.now().month
+        self.report_year = datetime.now().year
+        self.month_display = QLineEdit(f"Tháng {self.report_month}")
+        self.month_display.setReadOnly(True)
+        self.month_display.setMinimumHeight(42)
+        mf.addWidget(self.month_display, 0, 1)
+        btn_pick_month = QPushButton("Chọn tháng")
+        btn_pick_month.setMinimumHeight(42)
+        btn_pick_month.clicked.connect(self._pick_report_month)
+        mf.addWidget(btn_pick_month, 0, 2)
         mf.addWidget(make_label("Năm:"), 1, 0)
         self.year_spin = QSpinBox()
         self.year_spin.setRange(2020, 2035)
-        self.year_spin.setValue(datetime.now().year)
+        self.year_spin.setValue(self.report_year)
         self.year_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.year_spin.valueChanged.connect(self._set_report_year)
         mf.addWidget(self.year_spin, 1, 1)
         ml.addLayout(mf)
 
@@ -2255,7 +2351,7 @@ class MainWindow(QMainWindow):
             self.dash_progress.setValue(0)
 
     def _overview_selection(self, sid, create=False):
-        tdate = self.overview_date.date().toString("yyyy-MM-dd")
+        tdate = self.overview_date_value.toString("yyyy-MM-dd")
         period = self.overview_period.currentData() or 1
         student = db.get_student(sid)
         sess = db.get_or_create_session(tdate, period) if create else None
@@ -2269,7 +2365,7 @@ class MainWindow(QMainWindow):
     def _refresh_overview_table(self):
         if not hasattr(self, "overview_table"):
             return
-        tdate = self.overview_date.date().toString("yyyy-MM-dd")
+        tdate = self.overview_date_value.toString("yyyy-MM-dd")
         period = self.overview_period.currentData() or 1
         sess = next((s for s in db.get_sessions_by_date(tdate) if s["period"] == period), None)
         att_map = {}
@@ -2341,6 +2437,13 @@ class MainWindow(QMainWindow):
             detail_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
             detail_lay.addWidget(btn_detail)
             self.overview_table.setCellWidget(row, 4, detail_w)
+
+    def _pick_overview_date(self):
+        dlg = DatePickDialog(self, self.overview_date_value)
+        if dlg.exec():
+            self.overview_date_value = dlg.selected
+            self.overview_date.setText(self.overview_date_value.toString("yyyy-MM-dd"))
+            self._refresh_overview_table()
 
     def _edit_overview_attendance(self, sid):
         if not self._ensure_admin():
@@ -2831,6 +2934,8 @@ class MainWindow(QMainWindow):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _populate_export_dates(self):
+        if isinstance(self.export_date, QLineEdit):
+            return
         self.export_date.clear()
         today = date.today().isoformat()
         try:
@@ -2850,12 +2955,29 @@ class MainWindow(QMainWindow):
             self.export_date.addItem(f"Hôm nay ({today})", today)
 
     def _selected_export_date(self):
-        txt = self.export_date.currentText().strip()
+        txt = self.export_date.text().strip() if isinstance(self.export_date, QLineEdit) else self.export_date.currentText().strip()
         m = re.search(r"\d{4}-\d{2}-\d{2}", txt)
         if m:
             return m.group(0)
-        data = self.export_date.currentData()
+        data = None if isinstance(self.export_date, QLineEdit) else self.export_date.currentData()
         return data or txt
+
+    def _pick_export_date(self):
+        dlg = DatePickDialog(self, self.export_date_value)
+        if dlg.exec():
+            self.export_date_value = dlg.selected
+            self.export_date.setText(self.export_date_value.toString("yyyy-MM-dd"))
+
+    def _set_report_year(self, year):
+        self.report_year = int(year)
+
+    def _pick_report_month(self):
+        dlg = MonthPickDialog(self, self.report_month, self.report_year)
+        if dlg.exec():
+            self.report_month = dlg.month
+            self.report_year = dlg.year
+            self.month_display.setText(f"Tháng {self.report_month}")
+            self.year_spin.setValue(self.report_year)
 
     def _preview_attendance(self):
         tdate = self._selected_export_date()
@@ -2945,8 +3067,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Lỗi xuất", msg)
 
     def _export_month(self, fmt):
-        m = self.month_combo.currentData()
-        y = self.year_spin.value()
+        m = self.report_month
+        y = self.report_year
         if fmt == "pdf":
             fp, msg = em.export_monthly_report_pdf(y, m)
         else:
@@ -3126,8 +3248,9 @@ def main():
     win = MainWindow()
     screen = QApplication.primaryScreen()
     if screen:
-        win.setGeometry(screen.availableGeometry())
-    win.showMaximized()
+        geo = screen.availableGeometry()
+        win.setGeometry(geo.x() + 24, geo.y() + 24, max(900, geo.width() - 48), max(520, geo.height() - 64))
+    win.showNormal()
     win.raise_()
     win.activateWindow()
     sys.exit(app.exec())
