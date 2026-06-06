@@ -23,6 +23,7 @@ def _header_fill(hex_color):
 STATUS_VI = {
     "present": "Có mặt",
     "absent": "Vắng",
+    "excused": "Vắng có phép",
     "half": "Học 1/2",
     "scanning": "Đang quét",
 }
@@ -30,6 +31,7 @@ STATUS_VI = {
 STATUS_COLOR = {
     "present": "C6EFCE",  # xanh lá nhạt
     "absent": "FFC7CE",   # đỏ nhạt
+    "excused": "D9EAD3",  # xanh xám nhạt
     "half": "FFEB9C",     # vàng nhạt
     "scanning": "BDD7EE", # xanh dương nhạt
 }

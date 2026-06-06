@@ -51,6 +51,25 @@ def run(cmd, timeout=8):
         return str(exc)
 
 
+def nmcli_fields(line):
+    fields = []
+    cur = []
+    esc = False
+    for ch in line:
+        if esc:
+            cur.append(ch)
+            esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch == ":":
+            fields.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    fields.append("".join(cur))
+    return fields
+
+
 def popen_detached(cmd, cwd=None, stdout_path=None):
     stdout = open(stdout_path, "ab", buffering=0) if stdout_path else subprocess.DEVNULL
     return subprocess.Popen(cmd, cwd=cwd, stdout=stdout, stderr=stdout, stdin=subprocess.DEVNULL,
@@ -145,18 +164,28 @@ class LcdUi:
         self.networks = []
         self.selected_ssid = ""
         self.password = ""
+        self.connecting_ssid = ""
         self.shift = False
         self.key_page = 0
         self.message = ""
         self.last_scan = 0
         self.last_touch = None
         self.scanning_wifi = False
+        self.wifi_iface = self.detect_wifi_iface()
         self.running = True
         self.font_big = self.load_font(32, True)
         self.font_mid = self.load_font(23, True)
         self.font = self.load_font(18, False)
         self.font_small = self.load_font(15, False)
         self.render(force=True)
+
+    def detect_wifi_iface(self):
+        out = run(["nmcli", "-t", "-f", "DEVICE,TYPE", "dev"], timeout=3)
+        for line in out.splitlines():
+            parts = nmcli_fields(line)
+            if len(parts) >= 2 and parts[1] == "wifi":
+                return parts[0]
+        return "wlan0"
 
     def load_font(self, size, bold=False):
         paths = [
@@ -210,12 +239,16 @@ class LcdUi:
         tmp.replace(COMMAND_PATH)
 
     def ip_addr(self):
+        out = run(["ip", "-4", "-o", "addr", "show", "dev", self.wifi_iface], timeout=2)
+        ips = [p for p in out.split() if re.match(r"\d+\.\d+\.\d+\.\d+", p)]
+        if ips:
+            return ips[0].split("/", 1)[0]
         out = run(["hostname", "-I"], timeout=2)
         ips = [p for p in out.split() if re.match(r"\d+\.\d+\.\d+\.\d+", p)]
-        return ips[0] if ips else "No IP"
+        return ips[0].split("/", 1)[0] if ips else "No IP"
 
     def wifi_name(self):
-        out = run(["nmcli", "-t", "-f", "GENERAL.CONNECTION", "dev", "show", "wlan0"], timeout=3)
+        out = run(["nmcli", "-t", "-f", "GENERAL.CONNECTION", "dev", "show", self.wifi_iface], timeout=3)
         if ":" in out:
             return out.split(":", 1)[1] or "Disconnected"
         return "Disconnected"
@@ -226,6 +259,15 @@ class LcdUi:
         connected = ssid not in ("", "Disconnected", "--") and ip != "No IP"
         return ssid, ip, connected
 
+    def saved_wifi_names(self):
+        out = run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], timeout=5)
+        saved = set()
+        for line in out.splitlines():
+            parts = nmcli_fields(line)
+            if len(parts) >= 2 and parts[1] == "802-11-wireless":
+                saved.add(parts[0])
+        return saved
+
     def scan_wifi(self):
         if self.scanning_wifi:
             return
@@ -234,23 +276,32 @@ class LcdUi:
         self.last_scan = time.time()
         self.render(force=True)
         try:
-            run(["nmcli", "dev", "wifi", "rescan"], timeout=8)
-            out = run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"], timeout=8)
+            self.wifi_iface = self.detect_wifi_iface()
+            saved = self.saved_wifi_names()
+            run(["nmcli", "dev", "wifi", "rescan", "ifname", self.wifi_iface], timeout=8)
+            out = run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,IN-USE", "dev", "wifi", "list", "ifname", self.wifi_iface], timeout=8)
             nets = []
             seen = set()
             for line in out.splitlines():
-                parts = line.split(":")
+                parts = nmcli_fields(line)
                 if not parts or not parts[0]:
                     continue
-                ssid = parts[0].replace("\\:", ":").strip()
+                ssid = parts[0].strip()
                 if ssid in seen:
                     continue
                 seen.add(ssid)
                 signal = parts[1] if len(parts) > 1 else ""
                 security = parts[2] if len(parts) > 2 else ""
-                nets.append({"ssid": ssid, "signal": signal, "security": security})
+                in_use = parts[3] if len(parts) > 3 else ""
+                nets.append({
+                    "ssid": ssid,
+                    "signal": signal,
+                    "security": security,
+                    "saved": ssid in saved,
+                    "active": in_use == "*",
+                })
             self.networks = nets[:8]
-            self.message = ""
+            self.message = f"Found {len(self.networks)} networks"
         finally:
             self.scanning_wifi = False
 
@@ -291,22 +342,50 @@ class LcdUi:
     def connect_wifi(self):
         ssid = self.selected_ssid
         password = self.password
-        self.message = f"Connecting {ssid}..."
+        self.connecting_ssid = ssid
+        self.message = "Connecting..."
+        self.screen = "connecting"
         self.render(force=True)
-        if password:
-            out = run(["nmcli", "dev", "wifi", "connect", ssid, "password", password], timeout=25)
+        saved = ssid in self.saved_wifi_names()
+        if saved and not password:
+            out = run(["nmcli", "connection", "up", "id", ssid, "ifname", self.wifi_iface], timeout=25)
+        elif password:
+            out = run(["nmcli", "dev", "wifi", "connect", ssid, "password", password, "ifname", self.wifi_iface], timeout=25)
         else:
-            out = run(["nmcli", "dev", "wifi", "connect", ssid], timeout=25)
-        ok = "successfully" in out.lower()
+            out = run(["nmcli", "dev", "wifi", "connect", ssid, "ifname", self.wifi_iface], timeout=25)
+        out_l = out.lower()
+        ok = "successfully" in out_l or "activated" in out_l
         ssid_now, ip_now, connected = self.wifi_status()
         if ok or connected:
-            result_message = f"Connected: {ssid_now[:18]} IP {ip_now}"
+            self.password = ""
+            self.message = f"Connected: {ssid_now[:18]} IP {ip_now}"
+            self.screen = "wifi"
+            for net in self.networks:
+                net["active"] = net["ssid"] == ssid_now
+                if net["ssid"] == ssid_now:
+                    net["saved"] = True
         else:
-            result_message = f"Failed: {out[:44]}"
-        self.password = ""
-        self.screen = "wifi"
+            bad_password = any(
+                phrase in out_l
+                for phrase in ("secrets were required", "no valid secrets", "wrong password", "password")
+            )
+            if bad_password or password or saved:
+                self.password = ""
+                self.screen = "password"
+                self.message = "Sai mật khẩu, nhập lại."
+            else:
+                self.screen = "wifi"
+                self.message = f"Connect failed: {out[:34]}"
+
+    def disconnect_wifi(self):
+        self.message = "Disconnecting WiFi..."
+        self.render(force=True)
+        out = run(["nmcli", "dev", "disconnect", self.wifi_iface], timeout=10)
+        if "successfully" in out.lower() or "disconnected" in out.lower():
+            self.message = "WiFi disconnected"
+        else:
+            self.message = f"Disconnect failed: {out[:32]}"
         self.scan_wifi()
-        self.message = result_message
 
     def draw_bg(self, d):
         for y in range(H):
@@ -368,16 +447,26 @@ class LcdUi:
         self.button(d, (365, 62, 468, 98), "BACK", "home")
         self.button(d, (250, 62, 354, 98), "SCAN", "scan")
         ssid_now, ip_now, connected = self.wifi_status()
-        status = f"{'ONLINE' if connected else 'OFFLINE'}: {ssid_now[:18]}  {ip_now}"
-        d.text((14, 102), status[:46], fill=(0, 230, 118) if connected else (255, 214, 0), font=self.font_small)
+        if connected:
+            self.button(d, (135, 62, 238, 98), "OFF", "disconnect", fill=(100, 28, 38))
+        status = f"{self.wifi_iface}  {'ON' if connected else 'OFF'}: {ssid_now[:18]}  {ip_now}"
+        d.text((14, 102), status[:52], fill=(0, 230, 118) if connected else (255, 214, 0), font=self.font_small)
         if (not self.networks or time.time() - self.last_scan > 60) and not self.scanning_wifi:
             self.scan_wifi()
         y = 124
         for i, net in enumerate(self.networks[:5]):
-            ssid = net["ssid"][:24]
+            ssid = net["ssid"][:20]
             sig = net["signal"]
-            sec = "LOCK" if net["security"] else "OPEN"
-            self.button(d, (12, y, 468, y + 34), f"{ssid}  {sig}%  {sec}", ("net", i), fill=(18, 32, 48))
+            if net.get("active"):
+                mark = "ON"
+                fill = (18, 88, 54)
+            elif net.get("saved"):
+                mark = "SAVED"
+                fill = (25, 52, 82)
+            else:
+                mark = "LOCK" if net["security"] else "OPEN"
+                fill = (18, 32, 48)
+            self.button(d, (12, y, 468, y + 34), f"{mark}  {ssid}  {sig}%", ("net", i), fill=fill)
             y += 38
         if self.message:
             d.text((14, 302), self.message[:58], fill=(255, 214, 0), font=self.font_small)
@@ -416,6 +505,17 @@ class LcdUi:
 
         page_name = ["num", "abc1", "abc2", "ABC1", "ABC2", "sym"][self.key_page % len(pages)]
         d.text((18, 272), f"Page: {page_name}   Tap MORE for more keys", fill=(235, 245, 250), font=self.font_small)
+        if self.message:
+            d.text((18, 298), self.message[:52], fill=(255, 214, 0), font=self.font_small)
+
+    def render_connecting(self, d):
+        self.header(d, "Connecting WiFi")
+        d.rounded_rectangle((18, 82, 462, 228), radius=10, fill=(18, 32, 48), outline=(58, 88, 116), width=2)
+        ssid = self.connecting_ssid or self.selected_ssid
+        d.text((34, 104), ssid[:32], fill=(235, 245, 250), font=self.font_mid)
+        d.text((34, 142), "Đang kết nối...", fill=(0, 212, 255), font=self.font)
+        d.text((34, 174), "Vui lòng chờ trong giây lát", fill=(127, 168, 201), font=self.font_small)
+        self.button(d, (128, 248, 352, 304), "CANCEL", "wifi", fill=(70, 54, 38))
 
     def render(self, force=False):
         self.buttons = []
@@ -426,6 +526,8 @@ class LcdUi:
             self.render_wifi(d)
         elif self.screen == "password":
             self.render_password(d)
+        elif self.screen == "connecting":
+            self.render_connecting(d)
         else:
             self.render_home(d)
         self.write_fb(img)
@@ -453,12 +555,21 @@ class LcdUi:
             self.message = "Refreshed"
         elif action == "scan":
             self.scan_wifi()
+        elif action == "disconnect":
+            self.disconnect_wifi()
         elif isinstance(action, tuple) and action[0] == "net":
             net = self.networks[action[1]]
             self.selected_ssid = net["ssid"]
-            if net["security"]:
+            if net.get("active"):
+                self.message = f"Already online: {self.selected_ssid[:20]}"
+            elif net.get("saved"):
+                self.password = ""
+                self.message = "Using saved password..."
+                self.connect_wifi()
+            elif net["security"]:
                 self.password = ""
                 self.key_page = 0
+                self.message = ""
                 self.screen = "password"
             else:
                 self.password = ""

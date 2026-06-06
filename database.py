@@ -254,6 +254,12 @@ def get_sessions_by_date(session_date):
     conn.close()
     return [dict(r) for r in rows]
 
+def get_session(session_id):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
 def update_session_status(session_id, status):
     conn = get_connection()
     conn.execute("UPDATE sessions SET status=? WHERE id=?", (status, session_id))
@@ -270,15 +276,17 @@ def mark_present(student_id, session_id, check_in_time=None):
         "SELECT * FROM attendance WHERE student_id=? AND session_id=?",
         (student_id, session_id)
     ).fetchone()
+    old_status = existing["status"] if existing else None
     if existing:
         first_seen = existing["check_in_time"] or check_in_time
+        new_status = "half" if old_status == "half" else "present"
         conn.execute(
             """
             UPDATE attendance
-            SET status='present', check_in_time=?, last_seen_time=?, scan_count=0
+            SET status=?, check_in_time=?, last_seen_time=?, scan_count=0
             WHERE student_id=? AND session_id=?
             """,
-            (first_seen, check_in_time, student_id, session_id)
+            (new_status, first_seen, check_in_time, student_id, session_id)
         )
     else:
         conn.execute(
@@ -290,6 +298,7 @@ def mark_present(student_id, session_id, check_in_time=None):
         )
     conn.commit()
     conn.close()
+    return old_status
 
 def increment_absent_scan(student_id, session_id):
     """Tăng số lần quét không thấy mặt → nếu >= threshold thì đánh vắng"""
@@ -303,9 +312,9 @@ def increment_absent_scan(student_id, session_id):
 
     if existing:
         new_count = existing["scan_count"] + 1
-        if existing["status"] == "present":
+        if existing["status"] in ("present", "half", "excused"):
             conn.close()
-            return "present"
+            return existing["status"]
         new_status = "absent" if new_count >= threshold else "scanning"
         conn.execute(
             "UPDATE attendance SET scan_count=?, status=? WHERE student_id=? AND session_id=?",
@@ -321,6 +330,34 @@ def increment_absent_scan(student_id, session_id):
     conn.commit()
     conn.close()
     return new_status
+
+def increment_present_miss(student_id, session_id):
+    """Tăng số lần vắng liên tiếp cho sinh viên đã có mặt; đủ ngưỡng thì chuyển 1/2 buổi."""
+    conn = get_connection()
+    existing = conn.execute(
+        "SELECT * FROM attendance WHERE student_id=? AND session_id=?",
+        (student_id, session_id)
+    ).fetchone()
+    if not existing:
+        conn.close()
+        return None, 0
+
+    settings = get_all_settings()
+    threshold = int(settings.get("absent_threshold", 3))
+    status = existing["status"]
+    if status != "present":
+        conn.close()
+        return status, int(existing["scan_count"] or 0)
+
+    new_count = int(existing["scan_count"] or 0) + 1
+    new_status = "half" if new_count >= threshold else "present"
+    conn.execute(
+        "UPDATE attendance SET scan_count=?, status=? WHERE student_id=? AND session_id=?",
+        (new_count, new_status, student_id, session_id)
+    )
+    conn.commit()
+    conn.close()
+    return new_status, new_count
 
 def get_attendance_by_session(session_id):
     conn = get_connection()
@@ -362,7 +399,7 @@ def finalize_absent_for_session(session_id):
                 "INSERT INTO attendance (student_id, session_id, status) VALUES (?, ?, 'absent')",
                 (s["student_id"], session_id)
             )
-        elif existing["status"] not in ("present", "half"):
+        elif existing["status"] not in ("present", "half", "excused"):
             conn.execute(
                 "UPDATE attendance SET status='absent' WHERE student_id=? AND session_id=?",
                 (s["student_id"], session_id)
@@ -373,7 +410,7 @@ def finalize_absent_for_session(session_id):
 def mark_half_attendance(student_id, session_id):
     conn = get_connection()
     conn.execute(
-        "UPDATE attendance SET status='half' WHERE student_id=? AND session_id=?",
+        "UPDATE attendance SET status='half', scan_count=0 WHERE student_id=? AND session_id=?",
         (student_id, session_id)
     )
     conn.commit()
@@ -398,6 +435,41 @@ def manual_update_attendance(student_id, session_id, status):
     conn.commit()
     conn.close()
 
+def update_attendance_detail(student_id, session_id, status, check_in_time=None, last_seen_time=None):
+    conn = get_connection()
+    existing = conn.execute(
+        "SELECT id FROM attendance WHERE student_id=? AND session_id=?",
+        (student_id, session_id)
+    ).fetchone()
+    if existing:
+        conn.execute(
+            """
+            UPDATE attendance
+            SET status=?, check_in_time=?, last_seen_time=?, scan_count=0
+            WHERE student_id=? AND session_id=?
+            """,
+            (status, check_in_time or None, last_seen_time or None, student_id, session_id)
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO attendance (student_id, session_id, status, check_in_time, last_seen_time, scan_count)
+            VALUES (?, ?, ?, ?, ?, 0)
+            """,
+            (student_id, session_id, status, check_in_time or None, last_seen_time or None)
+        )
+    conn.commit()
+    conn.close()
+
+def get_attendance_detail(student_id, session_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM attendance WHERE student_id=? AND session_id=?",
+        (student_id, session_id)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
 # ─── Scan Log ─────────────────────────────────────────────────────────────────
 
 def log_scan(student_id, session_id, result):
@@ -406,6 +478,34 @@ def log_scan(student_id, session_id, result):
         "INSERT INTO scan_logs (student_id, session_id, result) VALUES (?, ?, ?)",
         (student_id, session_id, result)
     )
+    conn.commit()
+    conn.close()
+
+def log_scan_at(student_id, session_id, result, scan_time):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO scan_logs (student_id, session_id, scan_time, result) VALUES (?, ?, ?, ?)",
+        (student_id, session_id, scan_time, result)
+    )
+    conn.commit()
+    conn.close()
+
+def get_scan_logs(student_id, session_id):
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT * FROM scan_logs
+        WHERE student_id=? AND session_id=? AND result!='scanning'
+        ORDER BY scan_time, id
+        """,
+        (student_id, session_id)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def delete_scan_log(log_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM scan_logs WHERE id=?", (log_id,))
     conn.commit()
     conn.close()
 
